@@ -7,7 +7,6 @@
   export let onVolumeChange: (vol: number) => void;
   export let onScaleChange: (index: number) => void;
   export let onSensitivityChange: (step: number) => void;
-  export let onTestClick: () => void;
 
   // Array di mappatura per la generazione dinamica della tendina (0 -> Scala 1, ecc.)
   const scaleNames = [
@@ -22,40 +21,45 @@
     "Scala 9"
   ];
 
-  // Inizializzazione dello slider lineare. 
-  // Il range [1.0, 10.0] garantisce che log10(x) produca un target [0.0, 1.0] per il DSP.
-  let faderValue = 10.0; // Default al massimo, corrispondente a masterVolume = 1.0 se non sovrascritto
+  // Inizializzazione dello slider lineare a partire dal valore di volume master.
+  let faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
+  let isDraggingVolume = false;
+
+  const masterVolumeAttribute = masterVolume;
 
   function dispatchVolume(event: Event): void {
     const target = event.target as HTMLInputElement;
     faderValue = parseFloat(target.value);
-    
-    // Mappatura percettiva tramite logaritmo puro base 10 (evitando funzioni pow/esponenziali).
-    // range input [1.0 -> 10.0] mappato su output [0.0 -> 1.0]
+
     const logMappedVolume = Math.log10(faderValue);
-    
+    console.debug(`[AudioControls] Volume slider: ${faderValue} -> ${logMappedVolume}`);
     onVolumeChange(logMappedVolume);
+  }
+
+  function onVolumeMouseDown(): void {
+    isDraggingVolume = true;
+  }
+
+  function onVolumeMouseUp(): void {
+    isDraggingVolume = false;
   }
 
   function dispatchScale(event: Event): void {
     const target = event.target as HTMLSelectElement;
-    onScaleChange(parseInt(target.value, 10));
+    const scaleIndex = parseInt(target.value, 10);
+    console.debug(`[AudioControls] Scale changed to index: ${scaleIndex}`);
+    onScaleChange(scaleIndex);
   }
 
   function dispatchSensitivity(event: Event): void {
     const target = event.target as HTMLInputElement;
-    onSensitivityChange(parseInt(target.value, 10));
+    const sensitivityValue = parseInt(target.value, 10);
+    console.debug(`[AudioControls] Sensitivity changed to: ${sensitivityValue}`);
+    onSensitivityChange(sensitivityValue);
   }
 </script>
 
-<div class="control-grid">
-  <div class="control-unit test-trigger">
-    <button class="btn-test" on:click={onTestClick}>
-      <span>TEST SIGNAL</span>
-    </button>
-    <div class="label">Impulse Generator</div>
-  </div>
-
+<div class="control-grid" data-master-volume={masterVolumeAttribute}>
   <div class="control-unit volume-control">
     <div class="slider-header">
       <span class="label">Master Volume</span>
@@ -68,7 +72,11 @@
       max="10.0" 
       step="0.01" 
       bind:value={faderValue} 
-      on:input={dispatchVolume} 
+      on:input={dispatchVolume}
+      on:mousedown={onVolumeMouseDown}
+      on:mouseup={onVolumeMouseUp}
+      on:touchstart={onVolumeMouseDown}
+      on:touchend={onVolumeMouseUp}
     />
   </div>
 
@@ -76,7 +84,7 @@
     <span class="label">Pitch Quantization Bank</span>
     <select class="dropdown" value={currentScale} on:change={dispatchScale}>
       {#each scaleNames as scale, index}
-        <option value={index}>{scale}</option>
+        <option value={index} selected={currentScale === index}>{scale}</option>
       {/each}
     </select>
   </div>
@@ -151,6 +159,7 @@
 
   /* Styling Input Range */
   input[type="range"] {
+    appearance: none;
     -webkit-appearance: none;
     width: 100%;
     background: transparent;
@@ -221,39 +230,4 @@
     border-color: #4a4a5a;
   }
 
-  /* Pulsante Test */
-  .btn-test {
-    background: #2a2a35;
-    border: 1px solid #3a3a4a;
-    padding: 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.1s ease-in-out;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-  }
-
-  .btn-test span {
-    font-size: 0.85rem;
-    font-weight: 700;
-    color: #ff9500;
-    letter-spacing: 0.1em;
-  }
-
-  .btn-test:active {
-    background: #ff9500;
-    border-color: #ffaa33;
-    transform: scale(0.98);
-  }
-  
-  .btn-test:active span {
-    color: #000000;
-  }
-
-  .test-trigger {
-    border-bottom: 1px solid #1c1c24;
-    padding-bottom: 20px;
-    margin-bottom: 10px;
-  }
 </style>

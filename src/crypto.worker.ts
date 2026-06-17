@@ -21,6 +21,7 @@ let lastTimestamp: number | null = null;
 // Gestione dell'handshake e dello stream WebSocket con backoff asincrono
 function connectStream(symbol: string = 'btcusdt') {
   const uri = `wss://stream.binance.com:9443/ws/${symbol}@aggTrade`;
+  console.log(`[Worker] Connecting to WebSocket: ${uri}`);
   const ws = new WebSocket(uri);
 
   ws.onopen = () => {
@@ -76,8 +77,8 @@ function processTick(payload: BinanceTick): void {
   }
 
   // 4. Trasferimento asincrono dei dati grezzi alla UI e al motore DSP
-  self.postMessage({
-    type: 'TICK',
+  const tickData = {
+    type: 'TICK' as const,
     data: {
       price: currentPrice,
       market_volume: volume,
@@ -85,7 +86,9 @@ function processTick(payload: BinanceTick): void {
       maker_side: isBuyerMaker,
       volatility: volatilityRaw
     }
-  });
+  };
+  console.debug('[Worker] Sending tick:', tickData.data);
+  self.postMessage(tickData);
 }
 
 // In ascolto di comandi dal thread principale (es. cambio asset)

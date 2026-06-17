@@ -1,156 +1,355 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from 'svelte';
+  import * as RNBO from '@rnbo/js';
+  import CryptoChart from '../components/CryptoChart.svelte';
+  import AudioControls from '../components/AudioControls.svelte';
 
-  let name = $state("");
-  let greetMsg = $state("");
+  let cryptoData: number[] = Array(64).fill(0.5);
+  let isCalibrating: boolean = false;
+  let calibrationProgress: number = 0;
+  let calibrationInterval: number;
+  let remainingSeconds: number = 30;
+  let bangInterval: number;
 
-  async function greet(event: Event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
+  let audioContext: AudioContext | null = null;
+  let rnboDevice: any = null;
+  let isRnboReady: boolean = false;
+
+  let masterVolume: number = 0.8;
+  let currentScale: number = 0;
+  let sensitivityStep: number = 1;
+
+  onMount(() => {
+    const bootstrap = async () => {
+      try {
+        console.log('[Bootstrap] Starting RNBO initialization...');
+        
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        audioContext = new AudioContextClass({ latencyHint: 'interactive' });
+        console.log('[AudioContext] Created with state:', audioContext?.state);
+
+        const response = await fetch('/DSP.export.json');
+        if (!response.ok) {
+          throw new Error(`Failed to fetch DSP.export.json: ${response.status}`);
+        }
+        const patcher = await response.json();
+        console.log('[Bootstrap] DSP patcher loaded');
+
+        rnboDevice = await RNBO.createDevice({ context: audioContext, patcher });
+        console.log('[RNBO] Device created successfully');
+        console.log('[RNBO] Available parameters:', Array.from(rnboDevice.parametersById.keys()));
+        
+        rnboDevice.node.connect(audioContext.destination);
+        
+        if (audioContext?.state === 'suspended') {
+          await audioContext.resume();
+          console.log('[AudioContext] Resumed from suspended state');
+        }
+        
+        isRnboReady = true;
+        console.log('[Bootstrap] RNBO initialization complete - device ready');
+
+        // Now safe to set initial parameters
+        setRnboParam('master_volume', masterVolume);
+        setRnboParam('scaling/sensitivity', sensitivityStep);
+        setRnboParam('resonators/scales/scale_selector', currentScale);
+
+        // Start calibration after RNBO is ready
+        triggerCalibration();
+
+        // Send bang to DSP every 5 seconds
+        bangInterval = window.setInterval(() => {
+          setRnboParam('scaling/bang', 1);
+          setTimeout(() => setRnboParam('scaling/bang', 0), 50);
+        }, 5000);
+      } catch (err) {
+        console.error('[Bootstrap] Initialization failed:', err);
+      }
+    };
+
+    const initCryptoWorker = () => {
+      try {
+        const CryptoWorker = new Worker(new URL('../crypto.worker.ts', import.meta.url), { type: 'module' });
+        CryptoWorker.postMessage({ type: 'START', symbol: 'btcusdt' });
+        console.log('[Bootstrap] Crypto worker started');
+
+        CryptoWorker.onmessage = (event: MessageEvent) => {
+          if (event.data.type === 'TICK') {
+            const { price, market_volume, density, maker_side, volatility } = event.data.data;
+            console.debug('[Worker -> Main] Tick received', { price, market_volume, density, maker_side, volatility });
+
+            // Only send to RNBO if device is ready
+            if (isRnboReady && rnboDevice) {
+              logRnboMessage('WORKER', 'price', price);
+              setRnboParam('price', price);
+              logRnboMessage('WORKER', 'market_volume', market_volume);
+              setRnboParam('market_volume', market_volume);
+              logRnboMessage('WORKER', 'density', density);
+              setRnboParam('density', density);
+              logRnboMessage('WORKER', 'maker_side', maker_side);
+              setRnboParam('maker_side', maker_side);
+              logRnboMessage('WORKER', 'volatility', volatility);
+              setRnboParam('volatility', volatility);
+            }
+
+            // Always update the display
+            const displayNormalized = Math.max(0.0, Math.min(1.0, (price % 1000) / 1000));
+            cryptoData = [...cryptoData.slice(1), displayNormalized];
+          }
+        };
+      } catch (err) {
+        console.error('[Bootstrap] Failed to initialize crypto worker:', err);
+      }
+    };
+
+    // Run bootstrap
+    bootstrap();
+    
+    // Start crypto worker in parallel (doesn't depend on RNBO)
+    initCryptoWorker();
+
+    return () => {
+      if (calibrationInterval) clearInterval(calibrationInterval);
+      if (bangInterval) clearInterval(bangInterval);
+    };
+  });
+
+  function logRnboMessage(source: string, paramName: string, value: number): void {
+    console.info(`[RNBO MESSAGE] [${source}] ${paramName} = ${value}`);
   }
+
+  function setRnboParam(paramName: string, value: number): void {
+    if (!isRnboReady || !rnboDevice) {
+      console.warn(`[RNBO] Device not ready when setting ${paramName}`);
+      return;
+    }
+    logRnboMessage('SET', paramName, value);
+    try {
+      const param = rnboDevice.parametersById.get(paramName);
+      if (param) {
+        param.value = value;
+        console.debug(`[RNBO] ✓ Set ${paramName} = ${value}`);
+      } else {
+        console.warn(`[RNBO] ✗ Parameter not found: ${paramName}. Available:`, Array.from(rnboDevice.parametersById.keys()));
+      }
+    } catch (e) {
+      console.error(`[RNBO] Error setting ${paramName} = ${value}:`, e);
+    }
+  }
+
+  function triggerCalibration(): void {
+    if (isCalibrating) return;
+    if (!isRnboReady) {
+      console.warn('[Calibration] Deferred - RNBO not ready yet');
+      return;
+    }
+
+    isCalibrating = true;
+    calibrationProgress = 0;
+    remainingSeconds = 30;
+
+    setRnboParam('scaling/recalibration', 1);
+    setTimeout(() => setRnboParam('scaling/recalibration', 0), 50);
+
+    const totalDurationMs = 30000;
+    const updateIntervalMs = 100;
+    const step = (updateIntervalMs / totalDurationMs) * 100;
+
+    calibrationInterval = window.setInterval(() => {
+      calibrationProgress += step;
+      remainingSeconds = Math.ceil((30 * (100 - calibrationProgress)) / 100);
+
+      if (calibrationProgress >= 100) {
+        clearInterval(calibrationInterval);
+        isCalibrating = false;
+        calibrationProgress = 0;
+      }
+    }, updateIntervalMs);
+  }
+
+  function handleVolume(linear: number) {
+    masterVolume = linear;
+    console.debug(`[UI] Volume changed to: ${linear}`);
+    logRnboMessage('UI', 'master_volume', linear);
+    setRnboParam('master_volume', masterVolume);
+  }
+
+  function handleScale(index: number) {
+    currentScale = index;
+    const scaleValue = Number(index);
+    console.debug(`[UI] Scale changed to: ${scaleValue}`);
+    logRnboMessage('UI', 'resonators/scales/scale_selector', scaleValue);
+    if (isRnboReady) {
+      setRnboParam('resonators/scales/scale_selector', scaleValue);
+    }
+  }
+
+  function handleSensitivity(step: number) {
+    sensitivityStep = step;
+    const sensitivityValue = Number(step);
+    console.debug(`[UI] Sensitivity changed to: ${sensitivityValue}`);
+    logRnboMessage('UI', 'scaling/sensitivity', sensitivityValue);
+    if (isRnboReady) {
+      setRnboParam('scaling/sensitivity', sensitivityValue);
+    }
+  }
+
 </script>
 
-<main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
+<main class="workspace">
+  {#if isCalibrating}
+    <div class="calibration-overlay">
+      <div class="calibration-dialog">
+        <p class="calibration-text">Calibration in progress...</p>
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill" style="width: {calibrationProgress}%"></div>
+        </div>
+        <p class="calibration-subtext">{remainingSeconds}s rimanenti</p>
+      </div>
+    </div>
+  {/if}
 
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
+  <header class="app-header">
+    <h1>SoniFyer Core - Engine Standalone</h1>
+    <button class="btn-recal" on:click={triggerCalibration}>Recalibration</button>
+  </header>
+
+  <div class="interface-layout">
+    <section class="visual-viewport">
+      <CryptoChart dataBuffer={cryptoData} />
+    </section>
+
+    <section class="control-viewport">
+      <AudioControls
+        {masterVolume}
+        {sensitivityStep}
+        {currentScale}
+        onVolumeChange={handleVolume}
+        onScaleChange={handleScale}
+        onSensitivityChange={handleSensitivity}
+      />
+    </section>
   </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
-
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
 </main>
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+  :global(body) {
+    background-color: #08080a;
+    color: #e2e2e9;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    margin: 0;
+    padding: 20px;
+    user-select: none;
   }
 
-  a:hover {
-    color: #24c8db;
+  .workspace {
+    position: relative;
+    max-width: 1200px;
+    margin: 0 auto;
   }
 
-  input,
-  button {
+  .app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #1a1a24;
+    padding-bottom: 15px;
+    margin-bottom: 20px;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+  .btn-recal {
+    background: #1a1a24;
+    color: #ff3b30;
+    border: 1px solid #3a3a4c;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s ease;
+  }
+
+  .btn-recal:hover {
+    background: #2a2a3c;
+    border-color: #ff3b30;
+  }
+
+  .interface-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  @media (min-width: 768px) {
+    .interface-layout {
+      grid-template-columns: 2fr 1fr;
+    }
+  }
+
+  .calibration-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(5, 5, 8, 0.94);
+    backdrop-filter: blur(10px);
+    z-index: 9999;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .calibration-dialog {
+    background: #121218;
+    border: 1px solid #222230;
+    padding: 40px;
+    border-radius: 12px;
+    text-align: center;
+    width: 320px;
+  }
+
+  .calibration-text {
+    font-size: 1.1rem;
+    font-weight: 600;
     color: #ffffff;
-    background-color: #0f0f0f98;
+    margin-bottom: 20px;
+    letter-spacing: 0.05em;
   }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
 
+  .progress-bar-container {
+    width: 100%;
+    height: 6px;
+    background: #1c1c24;
+    border-radius: 3px;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #00ff88, #0a8ef0);
+    border-radius: 3px;
+    transition: width 0.1s linear;
+  }
+
+  .calibration-subtext {
+    margin-top: 16px;
+    color: #8e8e9b;
+    font-size: 0.9rem;
+  }
+
+  .visual-viewport {
+    min-height: 360px;
+  }
+
+  .control-viewport {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
 </style>

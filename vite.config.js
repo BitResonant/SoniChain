@@ -1,12 +1,34 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import { copyFileSync } from "fs";
+import { resolve } from "path";
 
-// @ts-expect-error process is a nodejs global
+const DSP_SRC = resolve("src/RNBO/DSP.json");
+const DSP_DEST = resolve("static/DSP.export.json");
+
+function syncDspPlugin() {
+  return {
+    name: "sync-dsp",
+    buildStart() {
+      copyFileSync(DSP_SRC, DSP_DEST);
+    },
+    configureServer(server) {
+      server.watcher.add(DSP_SRC);
+      server.watcher.on("change", (file) => {
+        if (file === DSP_SRC) {
+          copyFileSync(DSP_SRC, DSP_DEST);
+          server.ws.send({ type: "full-reload" });
+        }
+      });
+    },
+  };
+}
+
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [sveltekit()],
+  plugins: [sveltekit(), syncDspPlugin()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
