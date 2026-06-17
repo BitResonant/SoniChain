@@ -11,6 +11,7 @@
 
   let audioContext: AudioContext | null = null;
   let rnboDevice: any = null;
+  let isRnboReady: boolean = false;
 
   let masterVolume: number = 0.8;
   let currentScale: number = 0;
@@ -18,46 +19,82 @@
 
   onMount(() => {
     const bootstrap = async () => {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      audioContext = new AudioContextClass({ latencyHint: 'interactive' });
-
       try {
+        console.log('[Bootstrap] Starting RNBO initialization...');
+        
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        audioContext = new AudioContextClass({ latencyHint: 'interactive' });
+        console.log('[AudioContext] Created with state:', audioContext?.state);
+
         const response = await fetch('/DSP.export.json');
+        if (!response.ok) {
+          throw new Error(`Failed to fetch DSP.export.json: ${response.status}`);
+        }
         const patcher = await response.json();
+        console.log('[Bootstrap] DSP patcher loaded');
 
-        if ((window as any).RNBO) {
-          rnboDevice = await (window as any).RNBO.createDevice({ context: audioContext, patcher });
-          rnboDevice.node.connect(audioContext.destination);
-          setRnboParam('master_volume', masterVolume);
+        if (!(window as any).RNBO) {
+          throw new Error('RNBO library not found on window object');
         }
+
+        rnboDevice = await (window as any).RNBO.createDevice({ context: audioContext, patcher });
+        console.log('[RNBO] Device created successfully');
+        console.log('[RNBO] Available parameters:', Array.from(rnboDevice.parametersById.keys()));
+        
+        rnboDevice.node.connect(audioContext.destination);
+        
+        if (audioContext?.state === 'suspended') {
+          await audioContext.resume();
+          console.log('[AudioContext] Resumed from suspended state');
+        }
+        
+        isRnboReady = true;
+        console.log('[Bootstrap] RNBO initialization complete - device ready');
+        
+        // Now safe to set initial parameters
+        setRnboParam('master_volume', masterVolume);
+        
+        // Start calibration after RNBO is ready
+        triggerCalibration();
       } catch (err) {
-        console.error('[DSP Fault] Impossibile istanziare la patch RNBO:', err);
+        console.error('[Bootstrap] Initialization failed:', err);
       }
-
-      const CryptoWorker = new Worker(new URL('../crypto.worker.ts', import.meta.url), { type: 'module' });
-      CryptoWorker.postMessage({ type: 'START', symbol: 'btcusdt' });
-
-      CryptoWorker.onmessage = (event: MessageEvent) => {
-        if (event.data.type === 'TICK') {
-          const { price, market_volume, density, maker_side, volatility } = event.data.data;
-
-          if (rnboDevice) {
-            setRnboParam('price', price);
-            setRnboParam('market_volume', market_volume);
-            setRnboParam('density', density);
-            setRnboParam('maker_side', maker_side);
-            setRnboParam('volatility', volatility);
-          }
-
-          const displayNormalized = Math.max(0.0, Math.min(1.0, (price % 1000) / 1000));
-          cryptoData = [...cryptoData.slice(1), displayNormalized];
-        }
-      };
-
-      triggerCalibration();
     };
 
+    const initCryptoWorker = () => {
+      try {
+        const CryptoWorker = new Worker(new URL('../crypto.worker.ts', import.meta.url), { type: 'module' });
+        CryptoWorker.postMessage({ type: 'START', symbol: 'btcusdt' });
+        console.log('[Bootstrap] Crypto worker started');
+
+        CryptoWorker.onmessage = (event: MessageEvent) => {
+          if (event.data.type === 'TICK') {
+            const { price, market_volume, density, maker_side, volatility } = event.data.data;
+
+            // Only send to RNBO if device is ready
+            if (isRnboReady && rnboDevice) {
+              setRnboParam('price', price);
+              setRnboParam('market_volume', market_volume);
+              setRnboParam('density', density);
+              setRnboParam('maker_side', maker_side);
+              setRnboParam('volatility', volatility);
+            }
+
+            // Always update the display
+            const displayNormalized = Math.max(0.0, Math.min(1.0, (price % 1000) / 1000));
+            cryptoData = [...cryptoData.slice(1), displayNormalized];
+          }
+        };
+      } catch (err) {
+        console.error('[Bootstrap] Failed to initialize crypto worker:', err);
+      }
+    };
+
+    // Run bootstrap
     bootstrap();
+    
+    // Start crypto worker in parallel (doesn't depend on RNBO)
+    initCryptoWorker();
 
     return () => {
       if (calibrationInterval) clearInterval(calibrationInterval);
@@ -65,19 +102,29 @@
   });
 
   function setRnboParam(paramName: string, value: number): void {
-    if (!rnboDevice) return;
+    if (!isRnboReady || !rnboDevice) {
+      console.warn(`[RNBO] Device not ready when setting ${paramName}`);
+      return;
+    }
     try {
       const param = rnboDevice.parametersById.get(paramName);
       if (param) {
         param.value = value;
+        console.debug(`[RNBO] ✓ Set ${paramName} = ${value}`);
+      } else {
+        console.warn(`[RNBO] ✗ Parameter not found: ${paramName}. Available:`, Array.from(rnboDevice.parametersById.keys()));
       }
     } catch (e) {
-      console.warn(`[DSP Target Error] Parametro non trovato: ${paramName}`, e);
+      console.error(`[RNBO] Error setting ${paramName} = ${value}:`, e);
     }
   }
 
   function triggerCalibration(): void {
     if (isCalibrating) return;
+    if (!isRnboReady) {
+      console.warn('[Calibration] Deferred - RNBO not ready yet');
+      return;
+    }
 
     isCalibrating = true;
     calibrationProgress = 0;
@@ -104,20 +151,26 @@
 
   function handleVolume(linear: number) {
     masterVolume = linear;
+    console.debug(`[UI] Volume changed to: ${linear}`);
     setRnboParam('master_volume', masterVolume);
   }
 
   function handleScale(index: number) {
     currentScale = index;
-    setRnboParam('scale_selector', currentScale);
+    const scaleValue = Number(index);
+    console.debug(`[UI] Scale changed to: ${scaleValue}`);
+    setRnboParam('scale_selector', scaleValue);
   }
 
   function handleSensitivity(step: number) {
     sensitivityStep = step;
-    setRnboParam('sensitivity', sensitivityStep);
+    const sensitivityValue = Number(step);
+    console.debug(`[UI] Sensitivity changed to: ${sensitivityValue}`);
+    setRnboParam('sensitivity', sensitivityValue);
   }
 
   function handleTestTrigger() {
+    console.debug(`[UI] Test signal triggered`);
     setRnboParam('TEST', 1);
     setTimeout(() => setRnboParam('TEST', 0), 100);
   }

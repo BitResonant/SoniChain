@@ -35,21 +35,23 @@
     const target = event.target as HTMLInputElement;
     faderValue = parseFloat(target.value);
     
-    // Mappatura percettiva tramite logaritmo puro base 10 (evitando funzioni pow/esponenziali).
-    // range input [1.0 -> 10.0] mappato su output [0.0 -> 1.0]
     const logMappedVolume = Math.log10(faderValue);
-    
+    console.debug(`[AudioControls] Volume slider: ${faderValue} -> ${logMappedVolume}`);
     onVolumeChange(logMappedVolume);
   }
 
   function dispatchScale(event: Event): void {
     const target = event.target as HTMLSelectElement;
-    onScaleChange(parseInt(target.value, 10));
+    const scaleIndex = parseInt(target.value, 10);
+    console.debug(`[AudioControls] Scale changed to index: ${scaleIndex}`);
+    onScaleChange(scaleIndex);
   }
 
   function dispatchSensitivity(event: Event): void {
     const target = event.target as HTMLInputElement;
-    onSensitivityChange(parseInt(target.value, 10));
+    const sensitivityValue = parseInt(target.value, 10);
+    console.debug(`[AudioControls] Sensitivity changed to: ${sensitivityValue}`);
+    onSensitivityChange(sensitivityValue);
   }
 </script>
 
@@ -79,9 +81,9 @@
 
   <div class="control-unit scale-selector">
     <span class="label">Pitch Quantization Bank</span>
-    <select class="dropdown" bind:value={currentScale} on:change={dispatchScale}>
+    <select class="dropdown" on:change={dispatchScale}>
       {#each scaleNames as scale, index}
-        <option value={index}>{scale}</option>
+        <option value={String(index)} selected={currentScale === index}>{scale}</option>
       {/each}
     </select>
   </div>
