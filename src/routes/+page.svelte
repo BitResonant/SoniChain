@@ -9,6 +9,7 @@
   let calibrationProgress: number = 0;
   let calibrationInterval: number;
   let remainingSeconds: number = 30;
+  let bangInterval: number;
 
   let audioContext: AudioContext | null = null;
   let rnboDevice: any = null;
@@ -47,14 +48,20 @@
         
         isRnboReady = true;
         console.log('[Bootstrap] RNBO initialization complete - device ready');
-        
+
         // Now safe to set initial parameters
         setRnboParam('master_volume', masterVolume);
         setRnboParam('scaling/sensitivity', sensitivityStep);
         setRnboParam('resonators/scales/scale_selector', currentScale);
-        
+
         // Start calibration after RNBO is ready
         triggerCalibration();
+
+        // Send bang to DSP every 5 seconds
+        bangInterval = window.setInterval(() => {
+          setRnboParam('scaling/bang', 1);
+          setTimeout(() => setRnboParam('scaling/bang', 0), 50);
+        }, 5000);
       } catch (err) {
         console.error('[Bootstrap] Initialization failed:', err);
       }
@@ -103,6 +110,7 @@
 
     return () => {
       if (calibrationInterval) clearInterval(calibrationInterval);
+      if (bangInterval) clearInterval(bangInterval);
     };
   });
 
@@ -186,11 +194,6 @@
     }
   }
 
-  function handleTestTrigger() {
-    console.debug(`[UI] Test signal triggered`);
-    setRnboParam('TEST', 1);
-    setTimeout(() => setRnboParam('TEST', 0), 100);
-  }
 </script>
 
 <main class="workspace">
@@ -224,7 +227,6 @@
         onVolumeChange={handleVolume}
         onScaleChange={handleScale}
         onSensitivityChange={handleSensitivity}
-        onTestClick={handleTestTrigger}
       />
     </section>
   </div>
