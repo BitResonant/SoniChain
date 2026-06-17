@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import * as RNBO from '@rnbo/js';
   import CryptoChart from '../components/CryptoChart.svelte';
   import AudioControls from '../components/AudioControls.svelte';
 
@@ -33,11 +34,7 @@
         const patcher = await response.json();
         console.log('[Bootstrap] DSP patcher loaded');
 
-        if (!(window as any).RNBO) {
-          throw new Error('RNBO library not found on window object');
-        }
-
-        rnboDevice = await (window as any).RNBO.createDevice({ context: audioContext, patcher });
+        rnboDevice = await RNBO.createDevice({ context: audioContext, patcher });
         console.log('[RNBO] Device created successfully');
         console.log('[RNBO] Available parameters:', Array.from(rnboDevice.parametersById.keys()));
         
