@@ -50,6 +50,8 @@
         
         // Now safe to set initial parameters
         setRnboParam('master_volume', masterVolume);
+        setRnboParam('scaling/sensitivity', sensitivityStep);
+        setRnboParam('resonators/scales/scale_selector', currentScale);
         
         // Start calibration after RNBO is ready
         triggerCalibration();
@@ -67,13 +69,19 @@
         CryptoWorker.onmessage = (event: MessageEvent) => {
           if (event.data.type === 'TICK') {
             const { price, market_volume, density, maker_side, volatility } = event.data.data;
+            console.debug('[Worker -> Main] Tick received', { price, market_volume, density, maker_side, volatility });
 
             // Only send to RNBO if device is ready
             if (isRnboReady && rnboDevice) {
+              logRnboMessage('WORKER', 'price', price);
               setRnboParam('price', price);
+              logRnboMessage('WORKER', 'market_volume', market_volume);
               setRnboParam('market_volume', market_volume);
+              logRnboMessage('WORKER', 'density', density);
               setRnboParam('density', density);
+              logRnboMessage('WORKER', 'maker_side', maker_side);
               setRnboParam('maker_side', maker_side);
+              logRnboMessage('WORKER', 'volatility', volatility);
               setRnboParam('volatility', volatility);
             }
 
@@ -98,11 +106,16 @@
     };
   });
 
+  function logRnboMessage(source: string, paramName: string, value: number): void {
+    console.info(`[RNBO MESSAGE] [${source}] ${paramName} = ${value}`);
+  }
+
   function setRnboParam(paramName: string, value: number): void {
     if (!isRnboReady || !rnboDevice) {
       console.warn(`[RNBO] Device not ready when setting ${paramName}`);
       return;
     }
+    logRnboMessage('SET', paramName, value);
     try {
       const param = rnboDevice.parametersById.get(paramName);
       if (param) {
@@ -127,8 +140,8 @@
     calibrationProgress = 0;
     remainingSeconds = 30;
 
-    setRnboParam('recalibration', 1);
-    setTimeout(() => setRnboParam('recalibration', 0), 50);
+    setRnboParam('scaling/recalibration', 1);
+    setTimeout(() => setRnboParam('scaling/recalibration', 0), 50);
 
     const totalDurationMs = 30000;
     const updateIntervalMs = 100;
@@ -149,6 +162,7 @@
   function handleVolume(linear: number) {
     masterVolume = linear;
     console.debug(`[UI] Volume changed to: ${linear}`);
+    logRnboMessage('UI', 'master_volume', linear);
     setRnboParam('master_volume', masterVolume);
   }
 
@@ -156,14 +170,20 @@
     currentScale = index;
     const scaleValue = Number(index);
     console.debug(`[UI] Scale changed to: ${scaleValue}`);
-    setRnboParam('scale_selector', scaleValue);
+    logRnboMessage('UI', 'resonators/scales/scale_selector', scaleValue);
+    if (isRnboReady) {
+      setRnboParam('resonators/scales/scale_selector', scaleValue);
+    }
   }
 
   function handleSensitivity(step: number) {
     sensitivityStep = step;
     const sensitivityValue = Number(step);
     console.debug(`[UI] Sensitivity changed to: ${sensitivityValue}`);
-    setRnboParam('sensitivity', sensitivityValue);
+    logRnboMessage('UI', 'scaling/sensitivity', sensitivityValue);
+    if (isRnboReady) {
+      setRnboParam('scaling/sensitivity', sensitivityValue);
+    }
   }
 
   function handleTestTrigger() {

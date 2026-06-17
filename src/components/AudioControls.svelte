@@ -24,8 +24,9 @@
 
   // Inizializzazione dello slider lineare a partire dal valore di volume master.
   let faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
+  let isDraggingVolume = false;
 
-  $: if (Math.abs(Math.log10(faderValue) - masterVolume) > 0.001) {
+  $: if (!isDraggingVolume && Math.abs(Math.log10(faderValue) - masterVolume) > 0.001) {
     faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
   }
 
@@ -34,10 +35,18 @@
   function dispatchVolume(event: Event): void {
     const target = event.target as HTMLInputElement;
     faderValue = parseFloat(target.value);
-    
+
     const logMappedVolume = Math.log10(faderValue);
     console.debug(`[AudioControls] Volume slider: ${faderValue} -> ${logMappedVolume}`);
     onVolumeChange(logMappedVolume);
+  }
+
+  function onVolumeMouseDown(): void {
+    isDraggingVolume = true;
+  }
+
+  function onVolumeMouseUp(): void {
+    isDraggingVolume = false;
   }
 
   function dispatchScale(event: Event): void {
@@ -75,15 +84,19 @@
       max="10.0" 
       step="0.01" 
       bind:value={faderValue} 
-      on:input={dispatchVolume} 
+      on:input={dispatchVolume}
+      on:mousedown={onVolumeMouseDown}
+      on:mouseup={onVolumeMouseUp}
+      on:touchstart={onVolumeMouseDown}
+      on:touchend={onVolumeMouseUp}
     />
   </div>
 
   <div class="control-unit scale-selector">
     <span class="label">Pitch Quantization Bank</span>
-    <select class="dropdown" on:change={dispatchScale}>
+    <select class="dropdown" value={currentScale} on:change={dispatchScale}>
       {#each scaleNames as scale, index}
-        <option value={String(index)} selected={currentScale === index}>{scale}</option>
+        <option value={index} selected={currentScale === index}>{scale}</option>
       {/each}
     </select>
   </div>
@@ -105,7 +118,7 @@
         min="0" 
         max="2" 
         step="1" 
-        bind:value={sensitivityStep} 
+        value={sensitivityStep} 
         on:input={dispatchSensitivity} 
       />
       <div class="step-markers">
