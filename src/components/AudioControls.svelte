@@ -22,9 +22,14 @@
     "Scala 9"
   ];
 
-  // Inizializzazione dello slider lineare. 
-  // Il range [1.0, 10.0] garantisce che log10(x) produca un target [0.0, 1.0] per il DSP.
-  let faderValue = 10.0; // Default al massimo, corrispondente a masterVolume = 1.0 se non sovrascritto
+  // Inizializzazione dello slider lineare a partire dal valore di volume master.
+  let faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
+
+  $: if (Math.abs(Math.log10(faderValue) - masterVolume) > 0.001) {
+    faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
+  }
+
+  const masterVolumeAttribute = masterVolume;
 
   function dispatchVolume(event: Event): void {
     const target = event.target as HTMLInputElement;
@@ -48,7 +53,7 @@
   }
 </script>
 
-<div class="control-grid">
+<div class="control-grid" data-master-volume={masterVolumeAttribute}>
   <div class="control-unit test-trigger">
     <button class="btn-test" on:click={onTestClick}>
       <span>TEST SIGNAL</span>
@@ -74,7 +79,7 @@
 
   <div class="control-unit scale-selector">
     <span class="label">Pitch Quantization Bank</span>
-    <select class="dropdown" value={currentScale} on:change={dispatchScale}>
+    <select class="dropdown" bind:value={currentScale} on:change={dispatchScale}>
       {#each scaleNames as scale, index}
         <option value={index}>{scale}</option>
       {/each}
@@ -98,7 +103,7 @@
         min="0" 
         max="2" 
         step="1" 
-        value={sensitivityStep} 
+        bind:value={sensitivityStep} 
         on:input={dispatchSensitivity} 
       />
       <div class="step-markers">
@@ -151,6 +156,7 @@
 
   /* Styling Input Range */
   input[type="range"] {
+    appearance: none;
     -webkit-appearance: none;
     width: 100%;
     background: transparent;
