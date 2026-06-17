@@ -26,10 +26,6 @@
   let faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
   let isDraggingVolume = false;
 
-  $: if (!isDraggingVolume && Math.abs(Math.log10(faderValue) - masterVolume) > 0.001) {
-    faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
-  }
-
   const masterVolumeAttribute = masterVolume;
 
   function dispatchVolume(event: Event): void {
