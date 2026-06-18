@@ -3,46 +3,78 @@
   import * as RNBO from '@rnbo/js';
   import CryptoChart from '../components/CryptoChart.svelte';
   import AudioControls from '../components/AudioControls.svelte';
+  import OutputScope from '../components/OutputScope.svelte';
+  import { THEMES, THEME_LABELS, type ThemeName } from '../themes';
 
-  // Buffer del grafico: ora contiene i prezzi reali (non più valori normalizzati).
+  // ---- Asset / scale tables ----
+  const ASSETS = [
+    { symbol: 'btcusdt', label: 'Bitcoin', sym: 'BTC', quote: 'USDT', dec: 2 },
+    { symbol: 'ethusdt', label: 'Ethereum', sym: 'ETH', quote: 'USDT', dec: 2 },
+    { symbol: 'usdtusdc', label: 'Tether', sym: 'USDT', quote: 'USDC', dec: 4 },
+    { symbol: 'bnbusdt', label: 'BNB', sym: 'BNB', quote: 'USDT', dec: 2 },
+    { symbol: 'usdcusdt', label: 'USD Coin', sym: 'USDC', quote: 'USDT', dec: 4 }
+  ];
+  const SCALES = ['Major', 'Minor', 'Major pentatonic', 'Minor pentatonic', 'Whole tone', 'Lydian', 'Mixolydian'];
+
+  // Buffer del grafico: prezzi reali.
   let cryptoData: number[] = Array(64).fill(0);
-  // Al primo tick (o dopo un cambio asset) riempiamo l'intero buffer col prezzo
-  // corrente, così la curva parte piatta sulla scala giusta invece di interpolare
-  // da valori spuri.
-  let priceBufferInitialized: boolean = false;
+  let priceBufferInitialized = false;
 
   type CalibrationPhase = 'initial-connecting' | 'pending-calibrate' | 'recal-connecting' | 'calibrating' | 'idle';
   let calibrationPhase: CalibrationPhase = 'initial-connecting';
-  let calibrationProgress: number = 0;
+  let calibrationProgress = 0;
   let calibrationInterval: number;
-  let remainingSeconds: number = 30;
+  let remainingSeconds = 30;
 
   let audioContext: AudioContext | null = null;
   let rnboDevice: any = null;
-  let isRnboReady: boolean = false;
-  let streamIsReady: boolean = false;
-  let hasCalibrated: boolean = false;
+  let isRnboReady = false;
+  let streamIsReady = false;
+  let hasCalibrated = false;
 
-  // Both must be true before the Calibrate button appears on first load.
-  let initialConnectStreamReady: boolean = false;
-  let initialConnectTimerDone: boolean = false;
+  let initialConnectStreamReady = false;
+  let initialConnectTimerDone = false;
 
-  let masterVolume: number = 0;
-  let currentScale: number = 0;
-  let sensitivityStep: number = 1;
-  let currentCrypto: string = 'btcusdt';
+  // master_volume RNBO ∈ [0,1], coincide con la posizione del fader.
+  let masterVolume = 0;
+  let currentScale = 0;
+  let sensitivityStep = 1;
+  let currentCrypto = 'btcusdt';
+  let playing = true;
 
   let cryptoWorker: Worker | null = null;
 
+  // ---- Theme ----
+  let themeName: ThemeName = 'graphite';
+  $: theme = THEMES[themeName];
+  $: rootStyle = Object.entries(theme)
+    .map(([k, v]) => `--${k}:${v}`)
+    .join(';');
+
+  // ---- Market readouts (reali, smussate) ----
+  let lastPrice = 0;
+  let sessionOpen = 0;
+  let changePct = 0;
+  let volatilityNorm = 0;
+  let densityNorm = 0;
+  let flowImbalance = 0; // +1 bullish, -1 bearish
+  const VOL_REF = 0.0015; // stddev log-return di riferimento
+  const DENS_REF = 1200; // ms: intervalli più brevi => densità più alta
+
+  // ---- Audio analysis ----
+  let analyserMain: AnalyserNode | null = null;
+  let analyserL: AnalyserNode | null = null;
+  let analyserR: AnalyserNode | null = null;
+  let meterL = 0;
+  let meterR = 0;
+  let meterRAF = 0;
+
   function maybeShowCalibrate(): void {
     if (!isRnboReady || !initialConnectStreamReady || !initialConnectTimerDone) return;
-    if (calibrationPhase === 'initial-connecting') {
-      calibrationPhase = 'pending-calibrate';
-    }
+    if (calibrationPhase === 'initial-connecting') calibrationPhase = 'pending-calibrate';
   }
 
   onMount(() => {
-    // Minimum 3-second "Connecting..." display on first load.
     setTimeout(() => {
       initialConnectTimerDone = true;
       maybeShowCalibrate();
@@ -50,35 +82,51 @@
 
     const bootstrap = async () => {
       try {
-        console.log('[Bootstrap] Starting RNBO initialization...');
-
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         audioContext = new AudioContextClass({ latencyHint: 'interactive' });
-        console.log('[AudioContext] Created with state:', audioContext?.state);
 
         const response = await fetch(`/DSP.export.json?v=${Date.now()}`);
         if (!response.ok) throw new Error(`Failed to fetch DSP.export.json: ${response.status}`);
         const patcher = await response.json();
-        console.log('[Bootstrap] DSP patcher loaded');
 
         rnboDevice = await RNBO.createDevice({ context: audioContext, patcher });
-        console.log('[RNBO] Device created successfully');
         console.log('[RNBO] Available parameters:', Array.from(rnboDevice.parametersById.keys()));
 
-        rnboDevice.node.connect(audioContext.destination);
+        // Bus d'uscita con analizzatori reali (oscilloscopio, meter, goniometro).
+        analyserMain = audioContext.createAnalyser();
+        analyserMain.fftSize = 2048;
+        rnboDevice.node.connect(analyserMain);
+        analyserMain.connect(audioContext.destination);
 
-        if (audioContext?.state === 'suspended') {
-          await audioContext.resume();
-          console.log('[AudioContext] Resumed from suspended state');
+        // Tap stereo per il goniometro; mantenuti "vivi" da un sink a guadagno 0.
+        try {
+          const splitter = audioContext.createChannelSplitter(2);
+          analyserL = audioContext.createAnalyser();
+          analyserR = audioContext.createAnalyser();
+          analyserL.fftSize = 2048;
+          analyserR.fftSize = 2048;
+          rnboDevice.node.connect(splitter);
+          splitter.connect(analyserL, 0);
+          splitter.connect(analyserR, 1);
+          const sink = audioContext.createGain();
+          sink.gain.value = 0;
+          analyserL.connect(sink);
+          analyserR.connect(sink);
+          sink.connect(audioContext.destination);
+        } catch (e) {
+          console.warn('[Audio] Stereo analysis unavailable, falling back to mono:', e);
+          analyserL = null;
+          analyserR = null;
         }
 
-        isRnboReady = true;
-        console.log('[Bootstrap] RNBO initialization complete - device ready');
+        if (audioContext?.state === 'suspended') await audioContext.resume();
 
-        setRnboParam('master_volume', masterVolume);
+        isRnboReady = true;
+        pushVolume();
         setRnboParam('scaling/sensitivity', sensitivityStep);
         setRnboParam('resonators/scales/scale_selector', currentScale);
 
+        startMeters();
         maybeShowCalibrate();
       } catch (err) {
         console.error('[Bootstrap] Initialization failed:', err);
@@ -89,46 +137,47 @@
       try {
         cryptoWorker = new Worker(new URL('../crypto.worker.ts', import.meta.url), { type: 'module' });
         cryptoWorker.postMessage({ type: 'START', symbol: currentCrypto });
-        console.log('[Bootstrap] Crypto worker started');
 
         cryptoWorker.onmessage = (event: MessageEvent) => {
           if (event.data.type === 'STREAM_READY') {
-            console.debug('[Worker -> Main] Stream ready');
             streamIsReady = true;
-
             if (!hasCalibrated) {
               initialConnectStreamReady = true;
               if (isRnboReady) maybeShowCalibrate();
-            } else {
-              // Recalibration reconnect: switch phase and fire RNBO signal.
-              if (calibrationPhase === 'recal-connecting') {
-                calibrationPhase = 'calibrating';
-                triggerRnboRecalibration();
-              }
+            } else if (calibrationPhase === 'recal-connecting') {
+              calibrationPhase = 'calibrating';
+              triggerRnboRecalibration();
             }
             return;
           }
 
           if (event.data.type === 'TICK') {
             const { price, market_volume, density, maker_side, volatility } = event.data.data;
-            console.debug('[Worker -> Main] Tick received', { price, market_volume, density, maker_side, volatility });
 
             if (isRnboReady && rnboDevice && streamIsReady) {
-              logRnboMessage('WORKER', 'price', price);
               setRnboParam('price', price);
-              logRnboMessage('WORKER', 'market_volume', market_volume);
               setRnboParam('market_volume', market_volume);
-              logRnboMessage('WORKER', 'density', density);
               setRnboParam('density', density);
-              logRnboMessage('WORKER', 'maker_side', maker_side);
               setRnboParam('maker_side', maker_side);
-              logRnboMessage('WORKER', 'volatility', volatility);
               setRnboParam('volatility', volatility);
             }
+
+            // Letture di mercato reali → barre/indicatori (EMA).
+            const vTarget = Math.max(0, Math.min(1, volatility / VOL_REF));
+            volatilityNorm += (vTarget - volatilityNorm) * 0.08;
+            const dTarget = Math.max(0, Math.min(1, 1 - density / DENS_REF));
+            densityNorm += (dTarget - densityNorm) * 0.06;
+            // maker_side 0 = compratore taker (bullish), 1 = venditore taker (bearish)
+            const side = maker_side === 0 ? 1 : -1;
+            flowImbalance += (side - flowImbalance) * 0.05;
+
+            lastPrice = price;
+            changePct = sessionOpen ? ((price - sessionOpen) / sessionOpen) * 100 : 0;
 
             if (!priceBufferInitialized) {
               cryptoData = Array(cryptoData.length).fill(price);
               priceBufferInitialized = true;
+              sessionOpen = price;
             } else {
               cryptoData = [...cryptoData.slice(1), price];
             }
@@ -144,30 +193,60 @@
 
     return () => {
       if (calibrationInterval) clearInterval(calibrationInterval);
+      if (meterRAF) cancelAnimationFrame(meterRAF);
     };
   });
 
-  function logRnboMessage(source: string, paramName: string, value: number): void {
-    console.info(`[RNBO MESSAGE] [${source}] ${paramName} = ${value}`);
+  function rms(buf: Float32Array): number {
+    let s = 0;
+    for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
+    return Math.sqrt(s / buf.length);
+  }
+
+  function startMeters(): void {
+    const bufA = new Float32Array(1024);
+    const bufB = new Float32Array(1024);
+    let prev = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - prev) / 1000);
+      prev = now;
+      let l = 0;
+      let r = 0;
+      if (analyserL) {
+        analyserL.getFloatTimeDomainData(bufA);
+        l = rms(bufA);
+      } else if (analyserMain) {
+        analyserMain.getFloatTimeDomainData(bufA);
+        l = rms(bufA);
+      }
+      if (analyserR) {
+        analyserR.getFloatTimeDomainData(bufB);
+        r = rms(bufB);
+      } else {
+        r = l;
+      }
+      const gain = 2.6;
+      meterL = Math.max(Math.min(1, l * gain), meterL - dt * 1.6);
+      meterR = Math.max(Math.min(1, r * gain), meterR - dt * 1.6);
+      meterRAF = requestAnimationFrame(tick);
+    };
+    meterRAF = requestAnimationFrame(tick);
   }
 
   function setRnboParam(paramName: string, value: number): void {
-    if (!isRnboReady || !rnboDevice) {
-      console.warn(`[RNBO] Device not ready when setting ${paramName}`);
-      return;
-    }
-    logRnboMessage('SET', paramName, value);
+    if (!isRnboReady || !rnboDevice) return;
     try {
       const param = rnboDevice.parametersById.get(paramName);
-      if (param) {
-        param.value = value;
-        console.debug(`[RNBO] ✓ Set ${paramName} = ${value}`);
-      } else {
-        console.warn(`[RNBO] ✗ Parameter not found: ${paramName}. Available:`, Array.from(rnboDevice.parametersById.keys()));
-      }
+      if (param) param.value = value;
+      else console.warn(`[RNBO] Parameter not found: ${paramName}`);
     } catch (e) {
       console.error(`[RNBO] Error setting ${paramName} = ${value}:`, e);
     }
+  }
+
+  // Applica il volume rispettando il gate play/pause.
+  function pushVolume(): void {
+    setRnboParam('master_volume', playing ? masterVolume : 0);
   }
 
   function rampVolume(target: number, durationMs: number): void {
@@ -176,7 +255,7 @@
     function tick(now: number) {
       const progress = Math.min((now - t0) / durationMs, 1);
       masterVolume = start + (target - start) * progress;
-      setRnboParam('master_volume', masterVolume);
+      pushVolume();
       if (progress < 1) requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
@@ -186,9 +265,7 @@
     if (calibrationInterval) clearInterval(calibrationInterval);
     calibrationProgress = 0;
     remainingSeconds = 30;
-    const totalDurationMs = 30000;
-    const updateIntervalMs = 100;
-    const step = (updateIntervalMs / totalDurationMs) * 100;
+    const step = (100 / 30000) * 100;
     calibrationInterval = window.setInterval(() => {
       calibrationProgress += step;
       remainingSeconds = Math.ceil((30 * (100 - calibrationProgress)) / 100);
@@ -198,7 +275,7 @@
         calibrationProgress = 0;
         rampVolume(0.5, 100);
       }
-    }, updateIntervalMs);
+    }, 100);
   }
 
   function triggerRnboRecalibration(): void {
@@ -209,7 +286,6 @@
     }, 50);
   }
 
-  // Called by the "Calibrate" button on first load.
   function startCalibration(): void {
     audioContext?.resume();
     hasCalibrated = true;
@@ -218,9 +294,6 @@
     triggerRnboRecalibration();
   }
 
-  // Called by the "Recalibration" header button.
-  // Reconnects the websocket so STREAM_READY fires the RNBO signal once data is clean.
-  // The visual timer starts immediately so the progress bar is visible during the connect phase.
   function cancelCalibration(): void {
     if (calibrationInterval) clearInterval(calibrationInterval);
     calibrationPhase = 'idle';
@@ -228,561 +301,540 @@
   }
 
   function triggerCalibration(): void {
-    if (!isRnboReady) {
-      console.warn('[Calibration] Deferred - RNBO not ready yet');
-      return;
-    }
+    if (!isRnboReady) return;
     masterVolume = 0;
-    setRnboParam('master_volume', 0);
+    pushVolume();
     streamIsReady = false;
     calibrationPhase = 'recal-connecting';
     startCalibrationTimer();
     cryptoWorker?.postMessage({ type: 'SWITCH', symbol: currentCrypto });
   }
 
-  function handleVolume(linear: number) {
-    masterVolume = linear;
-    console.debug(`[UI] Volume changed to: ${linear}`);
-    logRnboMessage('UI', 'master_volume', linear);
-    setRnboParam('master_volume', masterVolume);
+  function handleVolume(v: number) {
+    masterVolume = v;
+    pushVolume();
+  }
+
+  function togglePlay() {
+    playing = !playing;
+    audioContext?.resume();
+    pushVolume();
   }
 
   function handleScale(index: number) {
     currentScale = index;
-    const scaleValue = Number(index);
-    console.debug(`[UI] Scale changed to: ${scaleValue}`);
-    logRnboMessage('UI', 'resonators/scales/scale_selector', scaleValue);
-    if (isRnboReady) setRnboParam('resonators/scales/scale_selector', scaleValue);
+    if (isRnboReady) setRnboParam('resonators/scales/scale_selector', Number(index));
   }
 
   function handleSensitivity(step: number) {
     sensitivityStep = step;
-    const sensitivityValue = Number(step);
-    console.debug(`[UI] Sensitivity changed to: ${sensitivityValue}`);
-    logRnboMessage('UI', 'scaling/sensitivity', sensitivityValue);
-    if (isRnboReady) setRnboParam('scaling/sensitivity', sensitivityValue);
+    if (isRnboReady) setRnboParam('scaling/sensitivity', Number(step));
   }
 
   function handleCryptoChange(symbol: string) {
     if (symbol === currentCrypto) return;
     currentCrypto = symbol;
     streamIsReady = false;
-    // L'asset cambia: la scala di prezzo è diversa, ricostruisci il buffer.
     priceBufferInitialized = false;
 
     if (hasCalibrated) {
       masterVolume = 0;
-      setRnboParam('master_volume', 0);
+      pushVolume();
       calibrationPhase = 'recal-connecting';
       startCalibrationTimer();
     } else {
-      // Still in initial flow — go back to connecting state for the new symbol.
       initialConnectStreamReady = false;
       calibrationPhase = 'initial-connecting';
     }
-
     cryptoWorker?.postMessage({ type: 'SWITCH', symbol });
   }
 
-  // ---- Help / suggerimenti contestuali ----------------------------------
-  // Testi fittizi: sostituiscili con le spiegazioni reali dei parametri.
-  const helpContent: Record<string, { title: string; body: string }> = {
-    asset: {
-      title: 'Asset',
-      body: 'Testo segnaposto per l’Asset. Qui scriverai la spiegazione della coppia di mercato selezionata e di come il suo flusso di prezzo alimenta il motore sonoro.'
-    },
-    volume: {
-      title: 'Master Volume',
-      body: 'Testo segnaposto per il Master Volume. Descrivi qui il controllo del livello d’uscita generale e la sua scala logaritmica.'
-    },
-    scale: {
-      title: 'Pitch Quantization Bank',
-      body: 'Testo segnaposto per il banco di quantizzazione. Spiega come le note generate vengono vincolate alla scala musicale scelta.'
-    },
-    sensitivity: {
-      title: 'Price Sensitivity',
-      body: 'Testo segnaposto per la Price Sensitivity. Indica come le variazioni di prezzo vengono mappate in modo più o meno marcato sui parametri sonori.'
-    },
-    recalibration: {
-      title: 'Recalibration',
-      body: 'Testo segnaposto per la Recalibration. Riconnette lo stream e ricalibra il range dinamico sul mercato corrente.'
-    },
-    chart: {
-      title: 'Signal Monitor',
-      body: 'Testo segnaposto per il grafico. Qui descriverai cosa rappresenta la curva del segnale e come leggerla.'
-    }
-  };
+  // ---- Derived UI ----
+  $: currentAsset = ASSETS.find((a) => a.symbol === currentCrypto) ?? ASSETS[0];
+  $: priceText = lastPrice
+    ? '$' + lastPrice.toLocaleString('en-US', { minimumFractionDigits: currentAsset.dec, maximumFractionDigits: currentAsset.dec })
+    : '—';
+  $: changeText = (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%';
+  $: up = changePct >= 0;
+  $: scaleName = SCALES[currentScale];
+  $: sensLabel = ['Low', 'Med', 'High'][sensitivityStep];
 
-  const defaultHelp = {
-    title: 'Suggerimenti',
-    body: 'Passa il mouse su un parametro per visualizzarne la spiegazione in questo riquadro.'
-  };
-
-  let activeHelpId: string | null = null;
-  function setHelp(id: string | null): void {
-    activeHelpId = id;
-  }
-  $: activeHelp = activeHelpId ? helpContent[activeHelpId] ?? defaultHelp : defaultHelp;
-
-  // ---- Etichette e stato derivati per l'header del grafico --------------
-  const assetLabels: Record<string, string> = {
-    btcusdt: 'BTC / USDT',
-    ethusdt: 'ETH / USDT',
-    usdtusdc: 'USDT / USDC',
-    bnbusdt: 'BNB / USDT',
-    usdcusdt: 'USDC / USDT'
-  };
-  $: assetLabel = assetLabels[currentCrypto] ?? currentCrypto.toUpperCase();
-
-  let chartStatus: 'live' | 'connecting' | 'idle';
-  $: chartStatus =
-    calibrationPhase === 'idle' && streamIsReady
-      ? 'live'
-      : calibrationPhase === 'initial-connecting' ||
-          calibrationPhase === 'recal-connecting' ||
-          calibrationPhase === 'calibrating'
-        ? 'connecting'
-        : 'idle';
+  $: calibActive = calibrationPhase !== 'idle';
+  $: calibReady = calibrationPhase === 'pending-calibrate';
+  $: calibRunning = calibrationPhase === 'calibrating';
+  $: calibConnecting = calibrationPhase === 'initial-connecting' || calibrationPhase === 'recal-connecting';
+  $: calibDeg = ((calibrationProgress / 100) * 360).toFixed(1) + 'deg';
+  $: calibrated = calibrationPhase === 'idle' && hasCalibrated;
+  $: statusText = calibrationPhase === 'idle' ? (playing ? 'Calibrated · streaming' : 'Calibrated · paused') : 'Awaiting calibration';
+  $: liveLabel = !streamIsReady ? 'SYNC' : playing ? 'LIVE' : 'PAUSED';
+  $: liveColor = !streamIsReady ? 'var(--accent)' : playing ? 'var(--up)' : 'var(--muted)';
 </script>
 
-<main class="workspace">
-  {#if calibrationPhase !== 'idle'}
-    <div class="calibration-overlay">
-      <div class="calibration-dialog">
-        <div class="cal-glyph">
-          <span class="cal-ring"></span>
-          <span class="cal-core"></span>
+<div class="desk" style={rootStyle}>
+  <div class="window">
+    <!-- TITLE BAR -->
+    <div class="titlebar">
+      <div class="tb-left">
+        <div class="tb-brand">
+          <span class="tb-name">SoniFyer</span>
+          <span class="tb-sub">Core · Engine Standalone</span>
         </div>
-        {#if calibrationPhase === 'initial-connecting'}
-          <p class="calibration-text">Connecting to websocket</p>
-          <p class="calibration-subtext">Establishing market data stream…</p>
-        {:else if calibrationPhase === 'pending-calibrate'}
-          <p class="calibration-text">Ready to Calibrate</p>
-          <p class="calibration-subtext">Tune the engine to the current market range.</p>
-          <button class="btn-calibrate" on:click={startCalibration}>Calibrate</button>
-        {:else}
-          <p class="calibration-text">
-            {calibrationPhase === 'recal-connecting' ? 'Connecting to websocket' : 'Calibration in progress'}
-          </p>
-          <p class="calibration-seconds">{remainingSeconds}<span>s</span></p>
-          <button class="btn-cancel" on:click={cancelCalibration}>Cancel</button>
-        {/if}
       </div>
-    </div>
-  {/if}
-
-  <header class="app-header">
-    <div class="brand">
-      <div class="brand-mark">
-        <span class="bar b1"></span>
-        <span class="bar b2"></span>
-        <span class="bar b3"></span>
-        <span class="bar b4"></span>
-      </div>
-      <div class="brand-text">
-        <h1>SoniFyer<span class="brand-accent">Core</span></h1>
-        <span class="brand-sub">Engine Standalone</span>
+      <div class="theme-switch">
+        {#each THEME_LABELS as t}
+          <button class:active={themeName === t.key} on:click={() => (themeName = t.key)}>{t.label}</button>
+        {/each}
       </div>
     </div>
 
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <button
-      class="btn-recal"
-      on:click={triggerCalibration}
-      on:mouseenter={() => setHelp('recalibration')}
-      on:mouseleave={() => setHelp(null)}
-      on:focus={() => setHelp('recalibration')}
-      on:blur={() => setHelp(null)}
-    >
-      <span class="recal-dot"></span>
-      Recalibration
-    </button>
-  </header>
+    <!-- BODY -->
+    <div class="body">
+      <!-- LEFT -->
+      <div class="left">
+        <!-- market header -->
+        <div class="market">
+          <div class="m-left">
+            <div class="m-top">
+              <span class="m-pair">{currentAsset.sym} · {currentAsset.quote}</span>
+              <span class="m-live" style="color:{liveColor}">
+                <span class="m-livedot" class:pulse={liveLabel === 'LIVE'} style="background:{liveColor}"></span>{liveLabel}
+              </span>
+            </div>
+            <div class="m-price-row">
+              <span class="m-price">{priceText}</span>
+              <span class="m-change" style="color:{up ? 'var(--up)' : 'var(--down)'}">{changeText}</span>
+            </div>
+          </div>
+          <div class="m-right">
+            <div class="m-stat">
+              <span class="m-stat-label">Scale</span>
+              <span class="m-stat-val">{scaleName}</span>
+            </div>
+            <div class="m-stat-div"></div>
+            <div class="m-stat">
+              <span class="m-stat-label">Sens</span>
+              <span class="m-stat-val">{sensLabel}</span>
+            </div>
+          </div>
+        </div>
 
-  <div class="interface-layout">
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <section
-      class="visual-viewport"
-      on:mouseenter={() => setHelp('chart')}
-      on:mouseleave={() => setHelp(null)}
-    >
-      <CryptoChart dataBuffer={cryptoData} {assetLabel} status={chartStatus} />
-    </section>
+        <CryptoChart dataBuffer={cryptoData} {theme} />
 
-    <section class="control-viewport">
+        <OutputScope {theme} {analyserMain} {analyserL} {analyserR} {flowImbalance} {volatilityNorm} {densityNorm} />
+      </div>
+
+      <!-- RIGHT -->
       <AudioControls
-        {masterVolume}
-        {sensitivityStep}
-        {currentScale}
+        assets={ASSETS}
+        scales={SCALES}
         {currentCrypto}
+        volume={masterVolume}
+        {currentScale}
+        {sensitivityStep}
+        {playing}
+        {meterL}
+        {meterR}
+        {statusText}
+        {calibrated}
         onVolumeChange={handleVolume}
         onScaleChange={handleScale}
         onSensitivityChange={handleSensitivity}
         onCryptoChange={handleCryptoChange}
-        onHelpHover={setHelp}
+        onTogglePlay={togglePlay}
+        onRecalibrate={triggerCalibration}
       />
-    </section>
-  </div>
 
-  <footer class="help-bar" class:active={activeHelpId !== null}>
-    <div class="help-icon">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="9" />
-        <path d="M9.5 9.2a2.5 2.5 0 1 1 3.4 2.3c-.7.3-1 .8-1 1.6" />
-        <line x1="12" y1="16.5" x2="12" y2="16.6" />
-      </svg>
+      <!-- CALIBRATION OVERLAY -->
+      {#if calibActive}
+        <div class="overlay">
+          <div class="cal-card">
+            {#if calibRunning}
+              <div class="cal-stack">
+                <div class="conic" style="background: conic-gradient(var(--accent) {calibDeg}, var(--lineSoft) 0)">
+                  <div class="conic-inner">
+                    <span class="cal-num">{remainingSeconds}</span>
+                    <span class="cal-sec">sec</span>
+                  </div>
+                </div>
+                <div class="cal-text">
+                  <span class="cal-title">Calibrating</span>
+                  <span class="cal-sub mono">Learning {currentAsset.sym} dynamic range</span>
+                </div>
+                <button class="cal-cancel" on:click={cancelCalibration}>Cancel</button>
+              </div>
+            {:else if calibReady}
+              <div class="cal-stack">
+                <div class="ring"><div class="ring-spin"></div></div>
+                <div class="cal-text">
+                  <span class="cal-title big">Calibrate Engine</span>
+                  <span class="cal-sub">The engine learns this asset's dynamic range before mapping price to sound.</span>
+                </div>
+                <button class="cal-go" on:click={startCalibration}>Calibrate</button>
+                <span class="cal-hint">≈ 30 seconds</span>
+              </div>
+            {:else if calibConnecting}
+              <div class="cal-stack">
+                <div class="ring"><div class="ring-spin"></div></div>
+                <div class="cal-text">
+                  <span class="cal-title big">Connecting</span>
+                  <span class="cal-sub mono">Establishing market data stream…</span>
+                </div>
+              </div>
+            {/if}
+          </div>
+        </div>
+      {/if}
     </div>
-    <div class="help-body">
-      <span class="help-title">{activeHelp.title}</span>
-      <p class="help-text">{activeHelp.body}</p>
-    </div>
-  </footer>
-</main>
+  </div>
+</div>
 
 <style>
-  :global(:root) {
-    --bg-0: #0e0b08;
-    --bg-1: #14100c;
-    --bg-2: #1c1813;
-    --bg-3: #251f18;
-    --border: rgba(214, 180, 140, 0.1);
-    --border-strong: rgba(214, 180, 140, 0.17);
-    --text-hi: #f1ece4;
-    --text-mid: #ada290;
-    --text-lo: #6f655a;
-    --accent: #cf7e36;
-    --accent-2: #df9b50;
-    --warn: #d3a749;
-    --danger: #cc6849;
-    /* glow caldo riutilizzabile, volutamente opaco/sabbiato */
-    --glow: rgba(207, 126, 54, 0.28);
-  }
-
   :global(body) {
-    background:
-      radial-gradient(1100px 600px at 18% -10%, rgba(207, 126, 54, 0.06), transparent 62%),
-      radial-gradient(900px 500px at 100% 0%, rgba(150, 95, 45, 0.05), transparent 58%),
-      var(--bg-0);
-    color: var(--text-hi);
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     margin: 0;
-    padding: 26px;
-    min-height: 100vh;
-    user-select: none;
+    background: #080706;
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    user-select: none;
+  }
+  :global(*) {
+    box-sizing: border-box;
   }
 
-  .workspace {
-    position: relative;
-    max-width: 1240px;
-    margin: 0 auto;
+  .desk {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .window {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
     display: flex;
     flex-direction: column;
-    gap: 22px;
+    overflow: hidden;
+    position: relative;
   }
 
-  /* ---- Header ---- */
-  .app-header {
+  /* title bar */
+  .titlebar {
     display: flex;
+    align-items: center;
     justify-content: space-between;
-    align-items: center;
+    height: 50px;
+    flex: none;
+    padding: 0 16px;
+    background: var(--titlebar);
+    border-bottom: 1px solid var(--lineSoft);
   }
-
-  .brand {
+  .tb-left {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 16px;
+  }
+  .tb-brand {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+  }
+  .tb-name {
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: -0.01em;
+  }
+  .tb-sub {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .theme-switch {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    background: var(--bg);
+    border: 1px solid var(--lineSoft);
+    border-radius: 9px;
+  }
+  .theme-switch button {
+    padding: 5px 11px;
+    border: none;
+    border-radius: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: transparent;
+    color: var(--faint);
+    font-weight: 500;
+  }
+  .theme-switch button.active {
+    background: var(--elev);
+    color: var(--text);
+    font-weight: 600;
   }
 
-  .brand-mark {
+  /* body */
+  .body {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: grid;
+    grid-template-columns: 1.62fr 1fr;
+    gap: 16px;
+    padding: 18px;
+  }
+  .left {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  /* market header */
+  .market {
     display: flex;
     align-items: flex-end;
-    gap: 3px;
-    height: 34px;
-    width: 34px;
-    padding: 6px;
-    border-radius: 10px;
-    background: linear-gradient(160deg, rgba(207, 126, 54, 0.16), rgba(150, 95, 45, 0.08));
-    border: 1px solid var(--border-strong);
-    box-sizing: border-box;
+    justify-content: space-between;
+    gap: 18px;
+    flex: none;
   }
-  .brand-mark .bar {
-    flex: 1;
-    border-radius: 2px;
-    background: linear-gradient(180deg, var(--accent-2), var(--accent));
-    animation: eq 1.2s ease-in-out infinite;
-  }
-  .brand-mark .b1 { height: 40%; animation-delay: 0s; }
-  .brand-mark .b2 { height: 85%; animation-delay: 0.15s; }
-  .brand-mark .b3 { height: 60%; animation-delay: 0.3s; }
-  .brand-mark .b4 { height: 95%; animation-delay: 0.45s; }
-
-  @keyframes eq {
-    0%, 100% { transform: scaleY(0.55); transform-origin: bottom; }
-    50% { transform: scaleY(1); transform-origin: bottom; }
-  }
-
-  .brand-text {
+  .m-left {
     display: flex;
     flex-direction: column;
-    line-height: 1.15;
+    gap: 7px;
   }
-  h1 {
-    font-size: 1.3rem;
-    font-weight: 700;
-    letter-spacing: -0.015em;
-    margin: 0;
-    color: var(--text-hi);
+  .m-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
-  .brand-accent {
-    color: var(--accent);
-    margin-left: 2px;
-  }
-  .brand-sub {
-    font-size: 0.66rem;
-    letter-spacing: 0.22em;
+  .m-pair {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: var(--text-lo);
-    font-weight: 600;
+    color: var(--muted);
   }
-
-  .btn-recal {
+  .m-live {
     display: inline-flex;
     align-items: center;
-    gap: 9px;
-    background: var(--bg-2);
-    color: var(--text-hi);
-    border: 1px solid var(--border-strong);
-    padding: 10px 18px;
-    border-radius: 10px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 0.85rem;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-    transition: all 0.18s ease;
+    gap: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
   }
-  .btn-recal:hover {
-    border-color: var(--danger);
-    background: rgba(251, 113, 133, 0.08);
-  }
-  .recal-dot {
-    width: 7px;
-    height: 7px;
+  .m-livedot {
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
-    background: var(--danger);
-    box-shadow: 0 0 5px rgba(204, 104, 73, 0.45);
   }
-
-  /* ---- Layout ---- */
-  .interface-layout {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 22px;
+  .m-livedot.pulse {
+    animation: sf-pulse 1.6s ease-in-out infinite;
   }
-
-  @media (min-width: 860px) {
-    .interface-layout {
-      grid-template-columns: minmax(0, 1.25fr) minmax(340px, 1fr);
-      align-items: stretch;
+  @keyframes sf-pulse {
+    0%, 100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.35;
+      transform: scale(0.82);
     }
   }
-
-  .visual-viewport {
-    min-width: 0;
-    min-height: 320px;
+  .m-price-row {
     display: flex;
+    align-items: baseline;
+    gap: 13px;
   }
-  .visual-viewport :global(.chart-card) {
-    flex: 1;
+  .m-price {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500;
+    font-size: 32px;
+    letter-spacing: -0.02em;
+    line-height: 1;
   }
-
-  .control-viewport {
-    min-width: 0;
+  .m-change {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .m-right {
     display: flex;
-    flex-direction: column;
-    gap: 20px;
+    gap: 22px;
+    padding-bottom: 3px;
   }
-
-  /* ---- Help bar ---- */
-  .help-bar {
-    display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 18px 20px;
-    min-height: 78px;
-    box-sizing: border-box;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-  }
-  .help-bar.active {
-    border-color: rgba(207, 126, 54, 0.3);
-    box-shadow: 0 0 0 1px rgba(207, 126, 54, 0.08), 0 14px 34px -26px rgba(207, 126, 54, 0.32);
-  }
-
-  .help-icon {
-    flex-shrink: 0;
-    width: 38px;
-    height: 38px;
-    display: grid;
-    place-items: center;
-    border-radius: 10px;
-    background: rgba(207, 126, 54, 0.1);
-    border: 1px solid rgba(207, 126, 54, 0.22);
-  }
-  .help-icon svg {
-    width: 20px;
-    height: 20px;
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 1.7;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  .help-body {
+  .m-stat {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    text-align: right;
   }
-  .help-title {
-    font-size: 0.7rem;
-    font-weight: 700;
+  .m-stat-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: var(--accent);
+    color: var(--faint);
   }
-  .help-text {
-    margin: 0;
-    font-size: 0.86rem;
-    line-height: 1.5;
-    color: var(--text-mid);
-    max-width: 90ch;
+  .m-stat-val {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .m-stat-div {
+    width: 1px;
+    background: var(--lineSoft);
   }
 
-  /* ---- Calibration overlay ---- */
-  .calibration-overlay {
-    position: fixed;
+  /* calibration overlay */
+  .overlay {
+    position: absolute;
     inset: 0;
-    background: rgba(6, 9, 14, 0.86);
-    backdrop-filter: blur(14px);
-    z-index: 9999;
+    z-index: 60;
     display: flex;
+    align-items: center;
     justify-content: center;
+    background: rgba(8, 7, 6, 0.78);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .cal-card {
+    width: 360px;
+    padding: 40px 38px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 30px 70px -16px rgba(0, 0, 0, 0.8);
+    text-align: center;
+    display: flex;
+    flex-direction: column;
     align-items: center;
   }
-
-  .calibration-dialog {
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
-    border: 1px solid var(--border-strong);
-    padding: 38px 40px;
-    border-radius: 18px;
-    text-align: center;
-    width: 340px;
-    box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.9);
+  .cal-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
   }
-
-  .cal-glyph {
+  .ring {
+    width: 66px;
+    height: 66px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ring-spin {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    border-top-color: transparent;
+    animation: sf-spin 0.9s linear infinite;
+  }
+  @keyframes sf-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .conic {
     position: relative;
-    width: 54px;
-    height: 54px;
-    margin: 0 auto 22px;
-  }
-  .cal-ring {
-    position: absolute;
-    inset: 0;
+    width: 108px;
+    height: 108px;
     border-radius: 50%;
-    border: 2px solid rgba(207, 126, 54, 0.22);
-    border-top-color: var(--accent);
-    animation: spin 1s linear infinite;
   }
-  .cal-core {
+  .conic-inner {
     position: absolute;
-    inset: 18px;
+    inset: 9px;
     border-radius: 50%;
-    background: var(--accent);
-    animation: pulse-core 1.6s ease-in-out infinite;
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
   }
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-  @keyframes pulse-core {
-    0%, 100% { opacity: 0.5; transform: scale(0.85); }
-    50% { opacity: 1; transform: scale(1); }
-  }
-
-  .calibration-text {
-    font-size: 1.08rem;
-    font-weight: 600;
-    color: var(--text-hi);
-    margin: 0 0 8px;
-    letter-spacing: 0.01em;
-  }
-
-  .calibration-seconds {
-    margin: 16px 0 0;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 1.1rem;
+  .cal-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 30px;
     font-weight: 500;
     line-height: 1;
-    color: var(--text-lo);
-    font-variant-numeric: tabular-nums;
   }
-  .calibration-seconds span {
-    font-size: 0.85rem;
-    margin-left: 1px;
-  }
-
-  .calibration-subtext {
-    margin: 6px 0 0;
-    color: var(--text-lo);
-    font-size: 0.8rem;
-    letter-spacing: 0.08em;
+  .cal-sec {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
+    color: var(--faint);
   }
-
-  .btn-cancel {
-    margin-top: 20px;
-    background: transparent;
-    color: var(--text-lo);
-    border: 1px solid var(--border-strong);
-    padding: 8px 24px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 0.82rem;
-    font-weight: 500;
-    letter-spacing: 0.04em;
-    transition: color 0.15s ease, border-color 0.15s ease;
+  .cal-text {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
   }
-  .btn-cancel:hover {
-    color: var(--text-mid);
-    border-color: rgba(214, 180, 140, 0.3);
-  }
-
-  .btn-calibrate {
-    margin-top: 22px;
-    width: 100%;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #2a1808;
-    border: none;
-    padding: 13px 32px;
-    border-radius: 10px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 0.95rem;
+  .cal-title {
+    font-size: 16px;
     font-weight: 700;
-    letter-spacing: 0.04em;
-    transition: transform 0.12s ease, box-shadow 0.18s ease;
-    box-shadow: 0 8px 22px -12px rgba(207, 126, 54, 0.45);
+    letter-spacing: -0.01em;
   }
-  .btn-calibrate:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 12px 28px -12px rgba(207, 126, 54, 0.55);
+  .cal-title.big {
+    font-size: 17px;
   }
-  .btn-calibrate:active {
-    transform: translateY(0);
+  .cal-sub {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 250px;
+  }
+  .cal-sub.mono {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+  }
+  .cal-go {
+    margin-top: 4px;
+    padding: 13px 40px;
+    background: var(--accent);
+    border: none;
+    border-radius: 10px;
+    color: #1a1108;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: filter 0.15s;
+  }
+  .cal-go:hover {
+    filter: brightness(1.08);
+  }
+  .cal-hint {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .cal-cancel {
+    background: transparent;
+    border: none;
+    color: var(--faint);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  .cal-cancel:hover {
+    color: var(--muted);
   }
 </style>

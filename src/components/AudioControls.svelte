@@ -1,377 +1,550 @@
 <script lang="ts">
-  // Dichiarazione rigorosa delle props in Svelte 5 (Legacy compat mode per HTML)
-  export let masterVolume: number;
-  export let sensitivityStep: number;
-  export let currentScale: number;
+  import { onMount } from 'svelte';
 
-  export let onVolumeChange: (vol: number) => void;
+  export let assets: { symbol: string; label: string; sym: string }[] = [];
+  export let currentCrypto: string;
+  export let volume: number; // 0..1 (= master_volume RNBO)
+  export let scales: string[] = [];
+  export let currentScale: number;
+  export let sensitivityStep: number;
+  export let playing: boolean = true;
+  export let meterL: number = 0; // 0..1, livello reale d'uscita
+  export let meterR: number = 0;
+  export let statusText: string = '';
+  export let calibrated: boolean = false;
+
+  export let onVolumeChange: (v: number) => void;
   export let onScaleChange: (index: number) => void;
   export let onSensitivityChange: (step: number) => void;
   export let onCryptoChange: (symbol: string) => void;
-  export let currentCrypto: string;
+  export let onTogglePlay: () => void = () => {};
+  export let onRecalibrate: () => void = () => {};
 
-  // Notifica il genitore di quale parametro è attualmente sotto al mouse (o null).
-  export let onHelpHover: (id: string | null) => void = () => {};
+  const SENS = ['Low', 'Med', 'High'];
 
-  const cryptoOptions = [
-    { label: 'Bitcoin',   symbol: 'btcusdt'  },
-    { label: 'Ethereum',  symbol: 'ethusdt'  },
-    { label: 'Tether',    symbol: 'usdtusdc' },
-    { label: 'BNB',       symbol: 'bnbusdt'  },
-    { label: 'USD Coin',  symbol: 'usdcusdt' },
-  ];
+  let assetMenuOpen = false;
+  let scaleMenuOpen = false;
 
-  function dispatchCrypto(event: Event): void {
-    const target = event.target as HTMLSelectElement;
-    onCryptoChange(target.value);
+  function closeMenus(): void {
+    assetMenuOpen = false;
+    scaleMenuOpen = false;
+  }
+  function toggleAssetMenu(): void {
+    scaleMenuOpen = false;
+    assetMenuOpen = !assetMenuOpen;
+  }
+  function toggleScaleMenu(): void {
+    assetMenuOpen = false;
+    scaleMenuOpen = !scaleMenuOpen;
   }
 
-  // Array di mappatura per la generazione dinamica della tendina (0 -> Scala 1, ecc.)
-  const scaleNames = [
-    "Major",
-    "Minor",
-    "Major pentatonic",
-    "Minor pentatonic",
-    "Whole tone scale",
-    "Lydian",
-    "Mixolydian"
-  ];
-
-  // Reattivo al prop: si aggiorna sia al drag dell'utente che ai cambi programmatici dal genitore.
-  let faderValue: number;
-  $: faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
-
-  function dispatchVolume(event: Event): void {
-    const target = event.target as HTMLInputElement;
-    faderValue = parseFloat(target.value);
-
-    const logMappedVolume = Math.log10(faderValue);
-    console.debug(`[AudioControls] Volume slider: ${faderValue} -> ${logMappedVolume}`);
-    onVolumeChange(logMappedVolume);
+  function selectAsset(symbol: string): void {
+    closeMenus();
+    onCryptoChange(symbol);
+  }
+  function selectScale(i: number): void {
+    closeMenus();
+    onScaleChange(i);
   }
 
-  function dispatchScale(event: Event): void {
-    const target = event.target as HTMLSelectElement;
-    const scaleIndex = parseInt(target.value, 10);
-    console.debug(`[AudioControls] Scale changed to index: ${scaleIndex}`);
-    onScaleChange(scaleIndex);
+  function onFaderDown(e: PointerEvent): void {
+    const track = e.currentTarget as HTMLElement;
+    const apply = (clientX: number) => {
+      const r = track.getBoundingClientRect();
+      const v = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+      onVolumeChange(v);
+    };
+    apply(e.clientX);
+    const move = (ev: PointerEvent) => apply(ev.clientX);
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
   }
 
-  function dispatchSensitivity(event: Event): void {
-    const target = event.target as HTMLInputElement;
-    const sensitivityValue = parseInt(target.value, 10);
-    console.debug(`[AudioControls] Sensitivity changed to: ${sensitivityValue}`);
-    onSensitivityChange(sensitivityValue);
-  }
+  $: currentAsset = assets.find((a) => a.symbol === currentCrypto) ?? { label: '—', sym: '', symbol: '' };
+  $: scaleName = scales[currentScale] ?? '—';
+  $: volPct = Math.round(volume * 100) + '%';
+  $: dbText = volume <= 0.001 ? '−∞ dB' : Math.round(20 * Math.log10(volume)) + ' dB';
 
-  // Percentuale per il riempimento visivo della traccia dei fader.
-  $: volumePct = ((faderValue - 1) / 9) * 100;
-  $: sensitivityPct = (sensitivityStep / 2) * 100;
+  onMount(() => {
+    const h = () => closeMenus();
+    window.addEventListener('click', h);
+    return () => window.removeEventListener('click', h);
+  });
 </script>
 
-<div class="control-grid">
+<div class="panel">
+  <!-- header -->
   <div class="panel-head">
-    <span class="panel-title">Audio Engine</span>
-    <span class="panel-sub">Sonification Parameters</span>
+    <span class="head-title">Engine</span>
+    <button class="play-btn" class:on={playing} on:click={onTogglePlay}>
+      <span class="play-dot"></span>{playing ? 'Live' : 'Paused'}
+    </button>
   </div>
 
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
-  <div
-    class="control-unit"
-    role="group"
-    on:mouseenter={() => onHelpHover('asset')}
-    on:mouseleave={() => onHelpHover(null)}
-    on:focusin={() => onHelpHover('asset')}
-    on:focusout={() => onHelpHover(null)}
-  >
-    <span class="label">Asset</span>
-    <div class="select-wrap">
-      <select class="dropdown" value={currentCrypto} on:change={dispatchCrypto}>
-        {#each cryptoOptions as opt}
-          <option value={opt.symbol} selected={currentCrypto === opt.symbol}>{opt.label}</option>
-        {/each}
-      </select>
-      <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" /></svg>
-    </div>
-  </div>
-
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
-  <div
-    class="control-unit"
-    role="group"
-    on:mouseenter={() => onHelpHover('volume')}
-    on:mouseleave={() => onHelpHover(null)}
-    on:focusin={() => onHelpHover('volume')}
-    on:focusout={() => onHelpHover(null)}
-  >
-    <div class="slider-header">
-      <span class="label">Master Volume</span>
-      <span class="value">{Math.round(Math.log10(faderValue) * 100)}%</span>
-    </div>
-    <input
-      type="range"
-      class="fader"
-      style="--fill: {volumePct}%"
-      min="1.0"
-      max="10.0"
-      step="0.01"
-      bind:value={faderValue}
-      on:input={dispatchVolume}
-    />
-  </div>
-
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
-  <div
-    class="control-unit"
-    role="group"
-    on:mouseenter={() => onHelpHover('scale')}
-    on:mouseleave={() => onHelpHover(null)}
-    on:focusin={() => onHelpHover('scale')}
-    on:focusout={() => onHelpHover(null)}
-  >
-    <span class="label">Pitch Quantization Bank</span>
-    <div class="select-wrap">
-      <select class="dropdown" value={currentScale} on:change={dispatchScale}>
-        {#each scaleNames as scale, index}
-          <option value={index} selected={currentScale === index}>{scale}</option>
-        {/each}
-      </select>
-      <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" /></svg>
-    </div>
-  </div>
-
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
-  <div
-    class="control-unit"
-    role="group"
-    on:mouseenter={() => onHelpHover('sensitivity')}
-    on:mouseleave={() => onHelpHover(null)}
-    on:focusin={() => onHelpHover('sensitivity')}
-    on:focusout={() => onHelpHover(null)}
-  >
-    <div class="slider-header">
-      <span class="label">Price Sensitivity</span>
-      <span class="value">
-        {#if sensitivityStep === 0} Low
-        {:else if sensitivityStep === 1} Med
-        {:else} High
+  <!-- body -->
+  <div class="panel-body">
+    <!-- ASSET -->
+    <div class="field">
+      <span class="label">Asset</span>
+      <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+      <div class="dd" on:click|stopPropagation>
+        <button class="dd-trigger" on:click={toggleAssetMenu}>
+          <span class="dd-trigger-main">
+            <span class="dd-label">{currentAsset.label}</span>
+            <span class="dd-sym">{currentAsset.sym}</span>
+          </span>
+          <span class="chev">▾</span>
+        </button>
+        {#if assetMenuOpen}
+          <div class="dd-menu">
+            {#each assets as a}
+              <button class="dd-item" class:active={a.symbol === currentCrypto} on:click={() => selectAsset(a.symbol)}>
+                <span class="dd-trigger-main">
+                  <span class="dd-label sm">{a.label}</span>
+                  <span class="dd-sym">{a.sym}</span>
+                </span>
+              </button>
+            {/each}
+          </div>
         {/if}
-      </span>
-    </div>
-    <div class="step-container">
-      <input
-        type="range"
-        class="fader step"
-        style="--fill: {sensitivityPct}%"
-        min="0"
-        max="2"
-        step="1"
-        value={sensitivityStep}
-        on:input={dispatchSensitivity}
-      />
-      <div class="step-markers">
-        <span class="marker" class:active={sensitivityStep === 0}>LOW</span>
-        <span class="marker" class:active={sensitivityStep === 1}>MED</span>
-        <span class="marker" class:active={sensitivityStep === 2}>HIGH</span>
       </div>
     </div>
+
+    <div class="divider"></div>
+
+    <!-- MASTER VOLUME -->
+    <div class="field">
+      <div class="row">
+        <span class="label">Master Volume</span>
+        <span class="mono-val">{volPct}</span>
+      </div>
+      <div
+        class="fader"
+        role="slider"
+        tabindex="0"
+        aria-label="Master Volume"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(volume * 100)}
+        on:pointerdown={onFaderDown}
+      >
+        <div class="fader-track"></div>
+        <div class="fader-fill" style="width:{volPct}"></div>
+        <div class="fader-thumb" style="left:{volPct}"></div>
+      </div>
+      <!-- stereo meters -->
+      <div class="meters">
+        <div class="meter-row">
+          <span class="meter-ch">L</span>
+          <div class="meter-track"><div class="meter-fill" style="width:{Math.min(100, meterL * 100)}%"></div></div>
+        </div>
+        <div class="meter-row">
+          <span class="meter-ch">R</span>
+          <div class="meter-track"><div class="meter-fill" style="width:{Math.min(100, meterR * 100)}%"></div></div>
+        </div>
+        <div class="db">{dbText}</div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- PITCH BANK -->
+    <div class="field">
+      <span class="label">Pitch Quantization Bank</span>
+      <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+      <div class="dd" on:click|stopPropagation>
+        <button class="dd-trigger" on:click={toggleScaleMenu}>
+          <span class="dd-label">{scaleName}</span>
+          <span class="chev">▾</span>
+        </button>
+        {#if scaleMenuOpen}
+          <div class="dd-menu scroll">
+            {#each scales as s, i}
+              <button class="dd-item scale" class:active={i === currentScale} on:click={() => selectScale(i)}>{s}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- SENSITIVITY -->
+    <div class="field">
+      <div class="row">
+        <span class="label">Price Sensitivity</span>
+        <span class="mono-val sm">{SENS[sensitivityStep]}</span>
+      </div>
+      <div class="seg">
+        {#each SENS as label, i}
+          <button class="seg-btn" class:active={i === sensitivityStep} on:click={() => onSensitivityChange(i)}>{label}</button>
+        {/each}
+      </div>
+    </div>
+  </div>
+
+  <!-- footer -->
+  <div class="panel-foot">
+    <span class="status"><span class="status-dot" class:on={calibrated}></span>{statusText}</span>
+    <button class="recal-btn" on:click={onRecalibrate}>Recalibrate</button>
   </div>
 </div>
 
 <style>
-  .control-grid {
+  .panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* header */
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--lineSoft);
+    flex: none;
+  }
+  .head-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .play-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px;
+    border-radius: 7px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .play-btn.on {
+    border-color: var(--up);
+    color: var(--up);
+  }
+  .play-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  /* body */
+  .panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 18px;
     display: flex;
     flex-direction: column;
     gap: 22px;
-    background: var(--bg-2, #141925);
-    padding: 22px;
-    border-radius: 14px;
-    border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
-    box-shadow: 0 20px 50px -28px rgba(0, 0, 0, 0.9);
+  }
+  .panel-body::-webkit-scrollbar {
+    width: 8px;
+  }
+  .panel-body::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: 8px;
+  }
+  .panel-body::-webkit-scrollbar-track {
+    background: transparent;
   }
 
-  .panel-head {
+  .field {
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+    gap: 11px;
+    position: relative;
   }
-
-  .panel-title {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--text-hi, #eef1f7);
-    letter-spacing: 0.01em;
-  }
-
-  .panel-sub {
-    font-size: 0.7rem;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--text-lo, #5d6678);
-    font-weight: 500;
-  }
-
-  .control-unit {
+  .row {
     display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 4px;
-    margin: -4px;
-    border-radius: 10px;
-    transition: background 0.18s ease;
+    align-items: center;
+    justify-content: space-between;
   }
-  .control-unit:hover {
-    background: rgba(255, 255, 255, 0.025);
-  }
-
   .label {
-    font-size: 0.72rem;
-    font-weight: 600;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: var(--text-mid, #9aa3b5);
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .mono-val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .mono-val.sm {
+    font-size: 12px;
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--lineSoft);
+  }
+
+  /* dropdowns */
+  .dd {
+    position: relative;
+  }
+  .dd-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 11px 13px;
+    background: var(--elev);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    cursor: pointer;
+    color: var(--text);
+    font-family: inherit;
+    transition: border-color 0.15s;
+  }
+  .dd-trigger:hover {
+    border-color: var(--accent);
+  }
+  .dd-trigger-main {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .dd-label {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .dd-label.sm {
+    font-size: 13px;
+  }
+  .dd-sym {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--faint);
     letter-spacing: 0.08em;
   }
-
-  .value {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.78rem;
-    font-weight: 500;
-    color: var(--accent, #cf7e36);
-    font-variant-numeric: tabular-nums;
+  .chev {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
   }
-
-  .slider-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  /* ---- Fader ---- */
-  input[type='range'] {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 100%;
-    height: 22px;
-    background: transparent;
-    cursor: pointer;
-  }
-  input[type='range']:focus {
-    outline: none;
-  }
-
-  .fader::-webkit-slider-runnable-track {
-    height: 6px;
-    border-radius: 3px;
-    background: linear-gradient(
-      to right,
-      var(--accent, #cf7e36) 0%,
-      var(--accent-2, #df9b50) var(--fill, 0%),
-      var(--bg-3, #1b2230) var(--fill, 0%),
-      var(--bg-3, #1b2230) 100%
-    );
-  }
-  .fader::-moz-range-track {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--bg-3, #1b2230);
-  }
-  .fader::-moz-range-progress {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--accent, #cf7e36);
-  }
-
-  .fader::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    height: 16px;
-    width: 16px;
-    margin-top: -5px;
-    border-radius: 50%;
-    background: #f3ead9;
-    border: 2px solid var(--accent, #cf7e36);
-    box-shadow: 0 0 0 4px rgba(207, 126, 54, 0.13), 0 2px 6px rgba(0, 0, 0, 0.5);
-    transition: box-shadow 0.15s ease, transform 0.1s ease;
-  }
-  .fader::-webkit-slider-thumb:hover {
-    box-shadow: 0 0 0 6px rgba(207, 126, 54, 0.18), 0 2px 8px rgba(0, 0, 0, 0.6);
-  }
-  .fader:active::-webkit-slider-thumb {
-    transform: scale(1.08);
-  }
-  .fader::-moz-range-thumb {
-    height: 16px;
-    width: 16px;
-    border-radius: 50%;
-    background: #f3ead9;
-    border: 2px solid var(--accent, #cf7e36);
-    box-shadow: 0 0 0 4px rgba(207, 126, 54, 0.13);
-  }
-
-  /* ---- Step (Sensitivity) ---- */
-  .step-container {
-    position: relative;
-    padding-bottom: 18px;
-  }
-  .step-markers {
+  .dd-menu {
     position: absolute;
-    bottom: 0;
+    top: 100%;
     left: 0;
-    width: 100%;
+    right: 0;
+    margin-top: 6px;
+    z-index: 40;
+    background: var(--elev);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 5px;
+    box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.7);
     display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .dd-menu.scroll {
+    max-height: 230px;
+    overflow-y: auto;
+  }
+  .dd-item {
+    display: flex;
+    align-items: center;
     justify-content: space-between;
+    gap: 10px;
+    padding: 9px 11px;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    background: transparent;
+    color: var(--text);
+    transition: background 0.12s;
   }
-  .marker {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem;
-    letter-spacing: 0.06em;
-    color: var(--text-lo, #5d6678);
-    font-weight: 600;
-    transition: color 0.15s ease;
+  .dd-item:hover {
+    background: var(--accentSoft);
   }
-  .marker.active {
-    color: var(--accent, #cf7e36);
+  .dd-item.active {
+    background: var(--accentSoft);
+  }
+  .dd-item.scale {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .dd-item.scale.active {
+    color: var(--text);
   }
 
-  /* ---- Dropdown ---- */
-  .select-wrap {
+  /* fader */
+  .fader {
     position: relative;
-  }
-  .dropdown {
-    width: 100%;
-    background: var(--bg-3, #1b2230);
-    color: var(--text-hi, #eef1f7);
-    border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.12));
-    padding: 11px 36px 11px 13px;
-    font-size: 0.88rem;
-    font-family: inherit;
-    border-radius: 9px;
-    appearance: none;
-    -webkit-appearance: none;
+    height: 26px;
+    display: flex;
+    align-items: center;
     cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease;
+    touch-action: none;
   }
-  .dropdown:hover {
-    border-color: rgba(207, 126, 54, 0.38);
-  }
-  .dropdown:focus {
-    outline: none;
-    border-color: var(--accent, #cf7e36);
-    background: var(--bg-1, #14100c);
-  }
-  .chevron {
+  .fader-track {
     position: absolute;
-    right: 13px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 12px;
-    height: 12px;
-    pointer-events: none;
-    fill: none;
-    stroke: var(--text-mid, #9aa3b5);
-    stroke-width: 1.6;
-    stroke-linecap: round;
-    stroke-linejoin: round;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: var(--panel2);
+    border: 1px solid var(--lineSoft);
+    border-radius: 4px;
+  }
+  .fader-fill {
+    position: absolute;
+    left: 0;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 4px;
+  }
+  .fader-thumb {
+    position: absolute;
+    transform: translateX(-50%);
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--text);
+    border: 3px solid var(--panel);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
+
+  /* meters */
+  .meters {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .meter-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .meter-ch {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: var(--faint);
+    width: 10px;
+  }
+  .meter-track {
+    flex: 1;
+    height: 5px;
+    background: var(--panel2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .meter-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+  }
+  .db {
+    text-align: right;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    color: var(--faint);
+    letter-spacing: 0.1em;
+  }
+
+  /* segmented sensitivity */
+  .seg {
+    display: flex;
+    gap: 6px;
+    padding: 4px;
+    background: var(--panel2);
+    border: 1px solid var(--lineSoft);
+    border-radius: 9px;
+  }
+  .seg-btn {
+    flex: 1;
+    padding: 8px 0;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    transition: all 0.15s;
+    background: transparent;
+    color: var(--muted);
+  }
+  .seg-btn.active {
+    background: var(--accent);
+    color: #1a1108;
+  }
+
+  /* footer */
+  .panel-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 13px 18px;
+    border-top: 1px solid var(--lineSoft);
+    flex: none;
+    background: var(--panel2);
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+    background: var(--faint);
+  }
+  .status-dot.on {
+    background: var(--up);
+  }
+  .recal-btn {
+    padding: 8px 15px;
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--accent);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .recal-btn:hover {
+    background: var(--accentSoft);
+    border-color: var(--accent);
   }
 </style>
