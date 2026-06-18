@@ -10,24 +10,48 @@
   let canvas: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D | null = null;
   let animationId: number;
+  let resizeObserver: ResizeObserver | null = null;
 
   // Cache delle dimensioni logiche per evitare letture DOM nel render loop.
   let logicalWidth = 0;
   let logicalHeight = 0;
 
+  // Buffer realmente disegnato: insegue dataBuffer un frame alla volta con
+  // smoothing esponenziale, smorzando lo "scatto" dei tick discreti.
+  let renderBuffer: number[] = [];
+  let lastFrameTime = 0;
+  // Costante di tempo (s) dello smorzamento: più alta = più morbido (e più lento).
+  const SMOOTH_TAU = 0.12;
+
   // Palette del grafico (allineata ai token globali del tema).
   const COL = {
-    accent: '#2dd4bf',
-    accentSoft: '#38bdf8',
-    grid: 'rgba(148, 163, 184, 0.07)',
-    gridStrong: 'rgba(148, 163, 184, 0.14)',
-    axisText: 'rgba(148, 163, 184, 0.45)',
-    bgTop: '#0d1320',
-    bgBottom: '#0a0e18'
+    accent: '#cf7e36',
+    accentSoft: '#df9b50',
+    grid: 'rgba(190, 165, 135, 0.055)',
+    gridStrong: 'rgba(190, 165, 135, 0.11)',
+    axisText: 'rgba(190, 165, 135, 0.4)',
+    bgTop: '#181410',
+    bgBottom: '#110e0a'
   };
 
-  // Geometria interna: lascia spazio per le etichette dell'asse.
-  const PAD = { top: 16, right: 52, bottom: 22, left: 14 };
+  // Geometria interna: lascia spazio per le etichette di prezzo sull'asse.
+  const PAD = { top: 16, right: 66, bottom: 22, left: 14 };
+
+  // Formattazione prezzo adattiva: la precisione segue il passo tra le linee
+  // della griglia, così funziona sia per BTC (~60'000) che per coppie ~1.0000.
+  function fmtPrice(v: number, step: number): string {
+    let decimals: number;
+    if (step >= 50) decimals = 0;
+    else if (step >= 5) decimals = 1;
+    else if (step >= 0.5) decimals = 2;
+    else if (step >= 0.05) decimals = 3;
+    else if (step >= 0.005) decimals = 4;
+    else decimals = 5;
+    return v.toLocaleString('en-US', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals
+    });
+  }
 
   function calculateLayout(): void {
     if (!canvas || !canvas.parentElement) return;
@@ -65,6 +89,24 @@
       return;
     }
 
+    // --- Interpolazione temporale (frame-rate independent) ---
+    // dt clampato: dopo un tab in background non "salta" in un solo frame.
+    const dt = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.05) : 0;
+    lastFrameTime = now;
+
+    if (renderBuffer.length !== dataBuffer.length) {
+      // Prima sincronizzazione (o cambio dimensione): parti dai valori reali.
+      renderBuffer = dataBuffer.slice();
+    } else if (dt > 0) {
+      // Ogni campione insegue il proprio target di una frazione per frame.
+      // Quando il buffer scorre, i target diventano i valori adiacenti e
+      // la curva "scivola" verso sinistra in modo continuo.
+      const alpha = 1 - Math.exp(-dt / SMOOTH_TAU);
+      for (let i = 0; i < renderBuffer.length; i++) {
+        renderBuffer[i] += (dataBuffer[i] - renderBuffer[i]) * alpha;
+      }
+    }
+
     const W = logicalWidth;
     const H = logicalHeight;
     const plotX = PAD.left;
@@ -79,7 +121,7 @@
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    if (dataBuffer.length < 2) {
+    if (renderBuffer.length < 2) {
       animationId = requestAnimationFrame(renderLoop);
       return;
     }
@@ -87,7 +129,7 @@
     // --- Range dinamico con margine per non appiattire la traccia ---
     let min = Infinity;
     let max = -Infinity;
-    for (const v of dataBuffer) {
+    for (const v of renderBuffer) {
       if (v < min) min = v;
       if (v > max) max = v;
     }
@@ -95,12 +137,16 @@
       min = 0;
       max = 1;
     }
-    const pad = (max - min) * 0.12 || 0.05;
-    const lo = Math.max(0, min - pad);
-    const hi = Math.min(1, max + pad) || lo + 0.1;
+    // Margine sopra/sotto la traccia; se il buffer è piatto usa un margine
+    // proporzionale alla grandezza del prezzo per non appiattire la linea.
+    const range = max - min;
+    const pad = range > 0 ? range * 0.12 : Math.abs(max) * 0.0015 || 0.05;
+    const lo = min - pad;
+    const hi = max + pad;
     const span = hi - lo || 1;
 
     const toY = (v: number) => plotY + plotH - ((v - lo) / span) * plotH;
+    const gridStep = span / 4;
 
     // --- Griglia orizzontale + etichette percentuali a destra ---
     ctx.lineWidth = 1;
@@ -116,10 +162,10 @@
       ctx.lineTo(plotX + plotW, y);
       ctx.stroke();
 
-      const val = Math.round((hi - (hi - lo) * t) * 100);
+      const val = hi - (hi - lo) * t;
       ctx.fillStyle = COL.axisText;
       ctx.textAlign = 'left';
-      ctx.fillText(`${val}%`, plotX + plotW + 8, y);
+      ctx.fillText(fmtPrice(val, gridStep), plotX + plotW + 8, y);
     }
 
     // --- Griglia verticale tenue ---
@@ -134,8 +180,8 @@
     }
 
     // --- Punti della serie ---
-    const stepX = plotW / (dataBuffer.length - 1);
-    const points = dataBuffer.map((v, i) => ({ x: plotX + i * stepX, y: toY(v) }));
+    const stepX = plotW / (renderBuffer.length - 1);
+    const points = renderBuffer.map((v, i) => ({ x: plotX + i * stepX, y: toY(v) }));
     const last = points[points.length - 1];
 
     // --- Riempimento ad area sotto la curva (gradiente verticale) ---
@@ -146,9 +192,9 @@
     ctx.lineTo(points[0].x, plotY + plotH);
     ctx.closePath();
     const fill = ctx.createLinearGradient(0, plotY, 0, plotY + plotH);
-    fill.addColorStop(0, 'rgba(45, 212, 191, 0.30)');
-    fill.addColorStop(0.5, 'rgba(45, 212, 191, 0.08)');
-    fill.addColorStop(1, 'rgba(45, 212, 191, 0)');
+    fill.addColorStop(0, 'rgba(207, 126, 54, 0.20)');
+    fill.addColorStop(0.5, 'rgba(207, 126, 54, 0.06)');
+    fill.addColorStop(1, 'rgba(207, 126, 54, 0)');
     ctx.fillStyle = fill;
     ctx.fill();
     ctx.restore();
@@ -162,15 +208,15 @@
     ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.shadowColor = COL.accent;
-    ctx.shadowBlur = 12;
+    ctx.shadowColor = 'rgba(207, 126, 54, 0.45)';
+    ctx.shadowBlur = 6;
     ctx.beginPath();
     tracePath(points);
     ctx.stroke();
     ctx.restore();
 
     // --- Linea guida verticale al punto corrente ---
-    ctx.strokeStyle = 'rgba(45, 212, 191, 0.20)';
+    ctx.strokeStyle = 'rgba(207, 126, 54, 0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(last.x, plotY);
@@ -180,29 +226,29 @@
     // --- Punto di testa con anello pulsante ---
     const pulse = (Math.sin(now / 420) + 1) / 2; // 0..1
     ctx.save();
-    ctx.fillStyle = 'rgba(45, 212, 191, 0.18)';
+    ctx.fillStyle = 'rgba(207, 126, 54, 0.14)';
     ctx.beginPath();
-    ctx.arc(last.x, last.y, 6 + pulse * 6, 0, Math.PI * 2);
+    ctx.arc(last.x, last.y, 6 + pulse * 5, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = COL.accent;
-    ctx.shadowColor = COL.accent;
-    ctx.shadowBlur = 14;
+    ctx.shadowColor = 'rgba(207, 126, 54, 0.5)';
+    ctx.shadowBlur = 7;
     ctx.beginPath();
     ctx.arc(last.x, last.y, 3.2, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
     // --- Etichetta valore corrente accanto al punto di testa ---
-    const curVal = Math.round(dataBuffer[dataBuffer.length - 1] * 100);
+    const curVal = renderBuffer[renderBuffer.length - 1];
     ctx.font = "600 11px 'JetBrains Mono', monospace";
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    const tag = `${curVal}%`;
+    const tag = fmtPrice(curVal, gridStep);
     const tagW = ctx.measureText(tag).width + 14;
     let tagX = last.x + 10;
     if (tagX + tagW > plotX + plotW) tagX = last.x - 10 - tagW;
     const tagY = Math.min(Math.max(last.y, plotY + 10), plotY + plotH - 10);
-    ctx.fillStyle = 'rgba(45, 212, 191, 0.14)';
+    ctx.fillStyle = 'rgba(207, 126, 54, 0.14)';
     roundRect(ctx, tagX, tagY - 10, tagW, 20, 5);
     ctx.fill();
     ctx.fillStyle = COL.accent;
@@ -231,13 +277,18 @@
   onMount(() => {
     ctx = canvas.getContext('2d', { alpha: false });
     calculateLayout();
-    window.addEventListener('resize', calculateLayout);
+    // Osserva direttamente il contenitore: gestisce ridimensionamenti della
+    // finestra e cambi di larghezza della colonna senza falsare il layout.
+    if (canvas.parentElement && 'ResizeObserver' in window) {
+      resizeObserver = new ResizeObserver(() => calculateLayout());
+      resizeObserver.observe(canvas.parentElement);
+    }
     animationId = requestAnimationFrame(renderLoop);
   });
 
   onDestroy(() => {
     cancelAnimationFrame(animationId);
-    window.removeEventListener('resize', calculateLayout);
+    resizeObserver?.disconnect();
   });
 </script>
 
@@ -265,6 +316,8 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    width: 100%;
+    min-width: 0;
     background: var(--bg-2, #141925);
     border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
     border-radius: 14px;
@@ -297,18 +350,18 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--accent, #2dd4bf);
-    box-shadow: 0 0 10px var(--accent, #2dd4bf);
+    background: var(--accent, #cf7e36);
+    box-shadow: 0 0 6px rgba(207, 126, 54, 0.5);
   }
   .dot.live {
     animation: pulse 1.6s ease-in-out infinite;
   }
   .dot.connecting {
-    background: #f5b53f;
-    box-shadow: 0 0 10px #f5b53f;
+    background: var(--warn, #d3a749);
+    box-shadow: 0 0 6px rgba(211, 167, 73, 0.5);
   }
   .dot.idle {
-    background: var(--text-lo, #5d6678);
+    background: var(--text-lo, #6f655a);
     box-shadow: none;
   }
 
@@ -342,29 +395,34 @@
     letter-spacing: 0.1em;
     padding: 3px 8px;
     border-radius: 5px;
-    color: var(--accent, #2dd4bf);
-    background: rgba(45, 212, 191, 0.12);
-    border: 1px solid rgba(45, 212, 191, 0.25);
+    color: var(--accent, #cf7e36);
+    background: rgba(207, 126, 54, 0.12);
+    border: 1px solid rgba(207, 126, 54, 0.24);
   }
   .meta-status.connecting {
-    color: #f5b53f;
-    background: rgba(245, 181, 63, 0.12);
-    border-color: rgba(245, 181, 63, 0.25);
+    color: var(--warn, #d3a749);
+    background: rgba(211, 167, 73, 0.12);
+    border-color: rgba(211, 167, 73, 0.24);
   }
   .meta-status.idle {
-    color: var(--text-lo, #5d6678);
-    background: rgba(148, 163, 184, 0.08);
-    border-color: rgba(148, 163, 184, 0.15);
+    color: var(--text-lo, #6f655a);
+    background: rgba(190, 165, 135, 0.08);
+    border-color: rgba(190, 165, 135, 0.15);
   }
 
   .render-viewport {
     position: relative;
     flex: 1;
     width: 100%;
-    min-height: 300px;
+    min-width: 0;
+    min-height: 240px;
   }
 
+  /* Posizionamento assoluto: il canvas non contribuisce alla dimensione
+     intrinseca del layout, evitando che la griglia si "incastri" allargandosi. */
   canvas {
+    position: absolute;
+    inset: 0;
     display: block;
     width: 100%;
     height: 100%;

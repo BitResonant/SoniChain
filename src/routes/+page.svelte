@@ -4,7 +4,12 @@
   import CryptoChart from '../components/CryptoChart.svelte';
   import AudioControls from '../components/AudioControls.svelte';
 
-  let cryptoData: number[] = Array(64).fill(0.5);
+  // Buffer del grafico: ora contiene i prezzi reali (non più valori normalizzati).
+  let cryptoData: number[] = Array(64).fill(0);
+  // Al primo tick (o dopo un cambio asset) riempiamo l'intero buffer col prezzo
+  // corrente, così la curva parte piatta sulla scala giusta invece di interpolare
+  // da valori spuri.
+  let priceBufferInitialized: boolean = false;
 
   type CalibrationPhase = 'initial-connecting' | 'pending-calibrate' | 'recal-connecting' | 'calibrating' | 'idle';
   let calibrationPhase: CalibrationPhase = 'initial-connecting';
@@ -121,8 +126,12 @@
               setRnboParam('volatility', volatility);
             }
 
-            const displayNormalized = Math.max(0.0, Math.min(1.0, (price % 1000) / 1000));
-            cryptoData = [...cryptoData.slice(1), displayNormalized];
+            if (!priceBufferInitialized) {
+              cryptoData = Array(cryptoData.length).fill(price);
+              priceBufferInitialized = true;
+            } else {
+              cryptoData = [...cryptoData.slice(1), price];
+            }
           }
         };
       } catch (err) {
@@ -212,6 +221,12 @@
   // Called by the "Recalibration" header button.
   // Reconnects the websocket so STREAM_READY fires the RNBO signal once data is clean.
   // The visual timer starts immediately so the progress bar is visible during the connect phase.
+  function cancelCalibration(): void {
+    if (calibrationInterval) clearInterval(calibrationInterval);
+    calibrationPhase = 'idle';
+    rampVolume(0.5, 200);
+  }
+
   function triggerCalibration(): void {
     if (!isRnboReady) {
       console.warn('[Calibration] Deferred - RNBO not ready yet');
@@ -252,6 +267,8 @@
     if (symbol === currentCrypto) return;
     currentCrypto = symbol;
     streamIsReady = false;
+    // L'asset cambia: la scala di prezzo è diversa, ricostruisci il buffer.
+    priceBufferInitialized = false;
 
     if (hasCalibrated) {
       masterVolume = 0;
@@ -347,10 +364,8 @@
           <p class="calibration-text">
             {calibrationPhase === 'recal-connecting' ? 'Connecting to websocket' : 'Calibration in progress'}
           </p>
-          <div class="progress-bar-container">
-            <div class="progress-bar-fill" style="width: {calibrationProgress}%"></div>
-          </div>
-          <p class="calibration-subtext">{remainingSeconds}s remaining</p>
+          <p class="calibration-seconds">{remainingSeconds}<span>s</span></p>
+          <button class="btn-cancel" on:click={cancelCalibration}>Cancel</button>
         {/if}
       </div>
     </div>
@@ -426,25 +441,27 @@
 
 <style>
   :global(:root) {
-    --bg-0: #080b12;
-    --bg-1: #0b0f18;
-    --bg-2: #141925;
-    --bg-3: #1b2230;
-    --border: rgba(148, 163, 184, 0.1);
-    --border-strong: rgba(148, 163, 184, 0.18);
-    --text-hi: #eef1f7;
-    --text-mid: #9aa3b5;
-    --text-lo: #5d6678;
-    --accent: #2dd4bf;
-    --accent-2: #38bdf8;
-    --warn: #f5b53f;
-    --danger: #fb7185;
+    --bg-0: #0e0b08;
+    --bg-1: #14100c;
+    --bg-2: #1c1813;
+    --bg-3: #251f18;
+    --border: rgba(214, 180, 140, 0.1);
+    --border-strong: rgba(214, 180, 140, 0.17);
+    --text-hi: #f1ece4;
+    --text-mid: #ada290;
+    --text-lo: #6f655a;
+    --accent: #cf7e36;
+    --accent-2: #df9b50;
+    --warn: #d3a749;
+    --danger: #cc6849;
+    /* glow caldo riutilizzabile, volutamente opaco/sabbiato */
+    --glow: rgba(207, 126, 54, 0.28);
   }
 
   :global(body) {
     background:
-      radial-gradient(1100px 600px at 18% -10%, rgba(56, 189, 248, 0.07), transparent 60%),
-      radial-gradient(900px 500px at 100% 0%, rgba(45, 212, 191, 0.06), transparent 55%),
+      radial-gradient(1100px 600px at 18% -10%, rgba(207, 126, 54, 0.06), transparent 62%),
+      radial-gradient(900px 500px at 100% 0%, rgba(150, 95, 45, 0.05), transparent 58%),
       var(--bg-0);
     color: var(--text-hi);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -485,7 +502,7 @@
     width: 34px;
     padding: 6px;
     border-radius: 10px;
-    background: linear-gradient(160deg, rgba(45, 212, 191, 0.16), rgba(56, 189, 248, 0.08));
+    background: linear-gradient(160deg, rgba(207, 126, 54, 0.16), rgba(150, 95, 45, 0.08));
     border: 1px solid var(--border-strong);
     box-sizing: border-box;
   }
@@ -554,7 +571,7 @@
     height: 7px;
     border-radius: 50%;
     background: var(--danger);
-    box-shadow: 0 0 8px var(--danger);
+    box-shadow: 0 0 5px rgba(204, 104, 73, 0.45);
   }
 
   /* ---- Layout ---- */
@@ -566,13 +583,14 @@
 
   @media (min-width: 860px) {
     .interface-layout {
-      grid-template-columns: 1.85fr 1fr;
+      grid-template-columns: minmax(0, 1.25fr) minmax(340px, 1fr);
       align-items: stretch;
     }
   }
 
   .visual-viewport {
-    min-height: 380px;
+    min-width: 0;
+    min-height: 320px;
     display: flex;
   }
   .visual-viewport :global(.chart-card) {
@@ -580,6 +598,7 @@
   }
 
   .control-viewport {
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 20px;
@@ -599,8 +618,8 @@
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
   .help-bar.active {
-    border-color: rgba(45, 212, 191, 0.35);
-    box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.12), 0 18px 40px -28px rgba(45, 212, 191, 0.5);
+    border-color: rgba(207, 126, 54, 0.3);
+    box-shadow: 0 0 0 1px rgba(207, 126, 54, 0.08), 0 14px 34px -26px rgba(207, 126, 54, 0.32);
   }
 
   .help-icon {
@@ -610,8 +629,8 @@
     display: grid;
     place-items: center;
     border-radius: 10px;
-    background: rgba(45, 212, 191, 0.1);
-    border: 1px solid rgba(45, 212, 191, 0.22);
+    background: rgba(207, 126, 54, 0.1);
+    border: 1px solid rgba(207, 126, 54, 0.22);
   }
   .help-icon svg {
     width: 20px;
@@ -675,7 +694,7 @@
     position: absolute;
     inset: 0;
     border-radius: 50%;
-    border: 2px solid rgba(45, 212, 191, 0.25);
+    border: 2px solid rgba(207, 126, 54, 0.22);
     border-top-color: var(--accent);
     animation: spin 1s linear infinite;
   }
@@ -684,7 +703,6 @@
     inset: 18px;
     border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 18px var(--accent);
     animation: pulse-core 1.6s ease-in-out infinite;
   }
   @keyframes spin {
@@ -703,33 +721,52 @@
     letter-spacing: 0.01em;
   }
 
-  .progress-bar-container {
-    width: 100%;
-    height: 6px;
-    background: var(--bg-3);
-    border-radius: 3px;
-    overflow: hidden;
-    margin-top: 18px;
+  .calibration-seconds {
+    margin: 16px 0 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.1rem;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--text-lo);
+    font-variant-numeric: tabular-nums;
   }
-  .progress-bar-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    border-radius: 3px;
-    transition: width 0.1s linear;
-    box-shadow: 0 0 12px rgba(45, 212, 191, 0.6);
+  .calibration-seconds span {
+    font-size: 0.85rem;
+    margin-left: 1px;
   }
 
   .calibration-subtext {
-    margin: 12px 0 0;
+    margin: 6px 0 0;
     color: var(--text-lo);
-    font-size: 0.84rem;
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .btn-cancel {
+    margin-top: 20px;
+    background: transparent;
+    color: var(--text-lo);
+    border: 1px solid var(--border-strong);
+    padding: 8px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.82rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .btn-cancel:hover {
+    color: var(--text-mid);
+    border-color: rgba(214, 180, 140, 0.3);
   }
 
   .btn-calibrate {
     margin-top: 22px;
     width: 100%;
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #06231f;
+    color: #2a1808;
     border: none;
     padding: 13px 32px;
     border-radius: 10px;
@@ -739,11 +776,11 @@
     font-weight: 700;
     letter-spacing: 0.04em;
     transition: transform 0.12s ease, box-shadow 0.18s ease;
-    box-shadow: 0 10px 26px -10px rgba(45, 212, 191, 0.7);
+    box-shadow: 0 8px 22px -12px rgba(207, 126, 54, 0.45);
   }
   .btn-calibrate:hover {
     transform: translateY(-1px);
-    box-shadow: 0 14px 32px -10px rgba(45, 212, 191, 0.85);
+    box-shadow: 0 12px 28px -12px rgba(207, 126, 54, 0.55);
   }
   .btn-calibrate:active {
     transform: translateY(0);

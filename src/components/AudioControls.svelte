@@ -238,7 +238,7 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.78rem;
     font-weight: 500;
-    color: var(--accent, #2dd4bf);
+    color: var(--accent, #cf7e36);
     font-variant-numeric: tabular-nums;
   }
 
@@ -266,8 +266,8 @@
     border-radius: 3px;
     background: linear-gradient(
       to right,
-      var(--accent, #2dd4bf) 0%,
-      var(--accent-2, #38bdf8) var(--fill, 0%),
+      var(--accent, #cf7e36) 0%,
+      var(--accent-2, #df9b50) var(--fill, 0%),
       var(--bg-3, #1b2230) var(--fill, 0%),
       var(--bg-3, #1b2230) 100%
     );
@@ -280,7 +280,7 @@
   .fader::-moz-range-progress {
     height: 6px;
     border-radius: 3px;
-    background: var(--accent, #2dd4bf);
+    background: var(--accent, #cf7e36);
   }
 
   .fader::-webkit-slider-thumb {
@@ -289,13 +289,13 @@
     width: 16px;
     margin-top: -5px;
     border-radius: 50%;
-    background: #f4f7fb;
-    border: 2px solid var(--accent, #2dd4bf);
-    box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.14), 0 2px 6px rgba(0, 0, 0, 0.5);
+    background: #f3ead9;
+    border: 2px solid var(--accent, #cf7e36);
+    box-shadow: 0 0 0 4px rgba(207, 126, 54, 0.13), 0 2px 6px rgba(0, 0, 0, 0.5);
     transition: box-shadow 0.15s ease, transform 0.1s ease;
   }
   .fader::-webkit-slider-thumb:hover {
-    box-shadow: 0 0 0 6px rgba(45, 212, 191, 0.2), 0 2px 8px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 0 0 6px rgba(207, 126, 54, 0.18), 0 2px 8px rgba(0, 0, 0, 0.6);
   }
   .fader:active::-webkit-slider-thumb {
     transform: scale(1.08);
@@ -304,9 +304,9 @@
     height: 16px;
     width: 16px;
     border-radius: 50%;
-    background: #f4f7fb;
-    border: 2px solid var(--accent, #2dd4bf);
-    box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.14);
+    background: #f3ead9;
+    border: 2px solid var(--accent, #cf7e36);
+    box-shadow: 0 0 0 4px rgba(207, 126, 54, 0.13);
   }
 
   /* ---- Step (Sensitivity) ---- */
@@ -331,7 +331,7 @@
     transition: color 0.15s ease;
   }
   .marker.active {
-    color: var(--accent, #2dd4bf);
+    color: var(--accent, #cf7e36);
   }
 
   /* ---- Dropdown ---- */
@@ -353,12 +353,12 @@
     transition: border-color 0.15s ease, background 0.15s ease;
   }
   .dropdown:hover {
-    border-color: rgba(45, 212, 191, 0.4);
+    border-color: rgba(207, 126, 54, 0.38);
   }
   .dropdown:focus {
     outline: none;
-    border-color: var(--accent, #2dd4bf);
-    background: var(--bg-1, #0e1119);
+    border-color: var(--accent, #cf7e36);
+    background: var(--bg-1, #14100c);
   }
   .chevron {
     position: absolute;
