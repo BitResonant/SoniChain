@@ -62,7 +62,7 @@
         // Calibration fires only when BOTH rnbo AND stream are ready.
         // If the stream connected before rnbo (streamIsReady already set), fire now.
         if (streamIsReady) {
-          setTimeout(() => { pendingCalibration = true; }, 1000);
+          pendingCalibration = true;
         }
       } catch (err) {
         console.error('[Bootstrap] Initialization failed:', err);
@@ -79,15 +79,10 @@
           if (event.data.type === 'STREAM_READY') {
             console.debug('[Worker -> Main] Stream ready');
             if (isRnboReady) {
+              streamIsReady = true;
               if (!hasCalibrated) {
-                // First startup: wait 1s, then start data flow and calibration together
-                // so the peak-follower in RNBO sees only clean data from t=0.
-                setTimeout(() => {
-                  streamIsReady = true;
-                  pendingCalibration = true;
-                }, 1000);
+                pendingCalibration = true;
               } else {
-                streamIsReady = true;
                 triggerCalibration();
               }
             } else {
@@ -172,6 +167,8 @@
   }
 
   function startCalibration(): void {
+    // The button click is a user gesture — resume AudioContext if still suspended.
+    audioContext?.resume();
     pendingCalibration = false;
     hasCalibrated = true;
     triggerCalibration();
