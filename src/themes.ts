@@ -1,5 +1,5 @@
 // Palette condivisa fra la pagina (variabili CSS) e i canvas (valori hex reali).
-// Tre temi importati dal design SoniFyer: graphite (default, caldo), slate (freddo), bone (chiaro).
+// Tre temi importati dal design SoniChain: graphite (default, caldo), slate (freddo), bone (chiaro).
 
 export interface Theme {
   desk: string;

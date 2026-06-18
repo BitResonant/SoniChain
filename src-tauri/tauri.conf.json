@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "sonifyer",
+  "productName": "SoniChain",
   "version": "0.1.0",
   "identifier": "com.matteo_caruso_linardon.sonifyer",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "sonifyer",
+        "title": "SoniChain",
         "width": 800,
         "height": 600
       }
