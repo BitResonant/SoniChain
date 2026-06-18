@@ -9,15 +9,18 @@
   let calibrationProgress: number = 0;
   let calibrationInterval: number;
   let remainingSeconds: number = 30;
-  let bangInterval: number;
 
   let audioContext: AudioContext | null = null;
   let rnboDevice: any = null;
   let isRnboReady: boolean = false;
+  let streamIsReady: boolean = false;
 
   let masterVolume: number = 0.8;
   let currentScale: number = 0;
   let sensitivityStep: number = 1;
+  let currentCrypto: string = 'btcusdt';
+
+  let cryptoWorker: Worker | null = null;
 
   onMount(() => {
     const bootstrap = async () => {
@@ -28,7 +31,7 @@
         audioContext = new AudioContextClass({ latencyHint: 'interactive' });
         console.log('[AudioContext] Created with state:', audioContext?.state);
 
-        const response = await fetch('/DSP.export.json');
+        const response = await fetch(`/DSP.export.json?v=${Date.now()}`);
         if (!response.ok) {
           throw new Error(`Failed to fetch DSP.export.json: ${response.status}`);
         }
@@ -54,14 +57,9 @@
         setRnboParam('scaling/sensitivity', sensitivityStep);
         setRnboParam('resonators/scales/scale_selector', currentScale);
 
-        // Start calibration after RNBO is ready
-        triggerCalibration();
-
-        // Send bang to DSP every 5 seconds
-        bangInterval = window.setInterval(() => {
-          setRnboParam('scaling/bang', 1);
-          setTimeout(() => setRnboParam('scaling/bang', 0), 50);
-        }, 5000);
+        // Calibration fires only when BOTH rnbo AND stream are ready.
+        // If the stream connected before rnbo (streamIsReady already set), fire now.
+        if (streamIsReady) triggerCalibration();
       } catch (err) {
         console.error('[Bootstrap] Initialization failed:', err);
       }
@@ -69,17 +67,26 @@
 
     const initCryptoWorker = () => {
       try {
-        const CryptoWorker = new Worker(new URL('../crypto.worker.ts', import.meta.url), { type: 'module' });
-        CryptoWorker.postMessage({ type: 'START', symbol: 'btcusdt' });
+        cryptoWorker = new Worker(new URL('../crypto.worker.ts', import.meta.url), { type: 'module' });
+        cryptoWorker.postMessage({ type: 'START', symbol: currentCrypto });
         console.log('[Bootstrap] Crypto worker started');
 
-        CryptoWorker.onmessage = (event: MessageEvent) => {
+        cryptoWorker.onmessage = (event: MessageEvent) => {
+          if (event.data.type === 'STREAM_READY') {
+            streamIsReady = true;
+            console.debug('[Worker -> Main] Stream ready — triggering recalibration');
+            // Calibration fires only when BOTH are ready.
+            // If rnbo connected before the stream (isRnboReady already set), fire now.
+            if (isRnboReady) triggerCalibration();
+            return;
+          }
+
           if (event.data.type === 'TICK') {
             const { price, market_volume, density, maker_side, volatility } = event.data.data;
             console.debug('[Worker -> Main] Tick received', { price, market_volume, density, maker_side, volatility });
 
-            // Only send to RNBO if device is ready
-            if (isRnboReady && rnboDevice) {
+            // Only send to RNBO if device is ready AND stream is confirmed coherent
+            if (isRnboReady && rnboDevice && streamIsReady) {
               logRnboMessage('WORKER', 'price', price);
               setRnboParam('price', price);
               logRnboMessage('WORKER', 'market_volume', market_volume);
@@ -110,7 +117,6 @@
 
     return () => {
       if (calibrationInterval) clearInterval(calibrationInterval);
-      if (bangInterval) clearInterval(bangInterval);
     };
   });
 
@@ -138,18 +144,20 @@
   }
 
   function triggerCalibration(): void {
-    if (isCalibrating) return;
     if (!isRnboReady) {
       console.warn('[Calibration] Deferred - RNBO not ready yet');
       return;
     }
+
+    // Reset any ongoing calibration before starting a new one
+    if (calibrationInterval) clearInterval(calibrationInterval);
 
     isCalibrating = true;
     calibrationProgress = 0;
     remainingSeconds = 30;
 
     setRnboParam('scaling/recalibration', 1);
-    setTimeout(() => setRnboParam('scaling/recalibration', 0), 50);
+    setTimeout(() => setRnboParam('scaling/recalibration', 0), 200);
 
     const totalDurationMs = 30000;
     const updateIntervalMs = 100;
@@ -194,6 +202,19 @@
     }
   }
 
+  function handleCryptoChange(symbol: string) {
+    if (symbol === currentCrypto) return;
+    currentCrypto = symbol;
+    console.debug(`[UI] Crypto switched to: ${symbol} — pausing RNBO data flow`);
+
+    // Stop sending data to RNBO immediately — prevents dirty first-ticks
+    // from the new stream from poisoning the adaptive threshold calibration.
+    // Data resumes only when STREAM_READY arrives (after 2 coherent ticks).
+    streamIsReady = false;
+
+    cryptoWorker?.postMessage({ type: 'SWITCH', symbol });
+  }
+
 </script>
 
 <main class="workspace">
@@ -224,9 +245,11 @@
         {masterVolume}
         {sensitivityStep}
         {currentScale}
+        {currentCrypto}
         onVolumeChange={handleVolume}
         onScaleChange={handleScale}
         onSensitivityChange={handleSensitivity}
+        onCryptoChange={handleCryptoChange}
       />
     </section>
   </div>

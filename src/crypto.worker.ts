@@ -17,12 +17,26 @@ interface BinanceTick {
 const WINDOW_SIZE = 64;
 const priceHistory: number[] = [];
 let lastTimestamp: number | null = null;
+let activeWs: WebSocket | null = null;
+let pendingStreamReady = false;
+let streamTickCount = 0;
 
 // Gestione dell'handshake e dello stream WebSocket con backoff asincrono
 function connectStream(symbol: string = 'btcusdt') {
+  if (activeWs) {
+    activeWs.onclose = null; // impedisce la riconnessione automatica sul vecchio socket
+    activeWs.close();
+    activeWs = null;
+  }
+
+  priceHistory.length = 0;
+  lastTimestamp = null;
+  streamTickCount = 0;
+
   const uri = `wss://stream.binance.com:9443/ws/${symbol}@aggTrade`;
   console.log(`[Worker] Connecting to WebSocket: ${uri}`);
   const ws = new WebSocket(uri);
+  activeWs = ws;
 
   ws.onopen = () => {
     console.log(`[Worker] Handshake stabilito. Stream per ${symbol.toUpperCase()} connesso.`);
@@ -38,8 +52,10 @@ function connectStream(symbol: string = 'btcusdt') {
   };
 
   ws.onclose = () => {
-    console.warn("[Worker] Connessione interrotta. Tentativo di riconnessione in corso...");
-    setTimeout(() => connectStream(symbol), 3000);
+    if (activeWs === ws) {
+      console.warn("[Worker] Connessione interrotta. Tentativo di riconnessione in corso...");
+      setTimeout(() => connectStream(symbol), 3000);
+    }
   };
 }
 
@@ -77,6 +93,12 @@ function processTick(payload: BinanceTick): void {
   }
 
   // 4. Trasferimento asincrono dei dati grezzi alla UI e al motore DSP
+  streamTickCount++;
+  if (pendingStreamReady && streamTickCount >= 2) {
+    pendingStreamReady = false;
+    self.postMessage({ type: 'STREAM_READY' });
+  }
+
   const tickData = {
     type: 'TICK' as const,
     data: {
@@ -93,7 +115,8 @@ function processTick(payload: BinanceTick): void {
 
 // In ascolto di comandi dal thread principale (es. cambio asset)
 self.onmessage = (e: MessageEvent) => {
-  if (e.data.type === 'START') {
+  if (e.data.type === 'START' || e.data.type === 'SWITCH') {
+    pendingStreamReady = true;
     connectStream(e.data.symbol);
   }
 };

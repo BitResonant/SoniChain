@@ -7,18 +7,31 @@
   export let onVolumeChange: (vol: number) => void;
   export let onScaleChange: (index: number) => void;
   export let onSensitivityChange: (step: number) => void;
+  export let onCryptoChange: (symbol: string) => void;
+  export let currentCrypto: string;
+
+  const cryptoOptions = [
+    { label: 'Bitcoin',   symbol: 'btcusdt'  },
+    { label: 'Ethereum',  symbol: 'ethusdt'  },
+    { label: 'Tether',    symbol: 'usdtusdc' },
+    { label: 'BNB',       symbol: 'bnbusdt'  },
+    { label: 'USD Coin',  symbol: 'usdcusdt' },
+  ];
+
+  function dispatchCrypto(event: Event): void {
+    const target = event.target as HTMLSelectElement;
+    onCryptoChange(target.value);
+  }
 
   // Array di mappatura per la generazione dinamica della tendina (0 -> Scala 1, ecc.)
   const scaleNames = [
-    "Scala 1",
-    "Scala 2",
-    "Scala 3",
-    "Scala 4",
-    "Scala 5",
-    "Scala 6",
-    "Scala 7",
-    "Scala 8",
-    "Scala 9"
+    "Major",
+    "Minor",
+    "Major pentatonic",
+    "Minor pentatonic",
+    "Whole tone scale",
+    "Lydian",
+    "Mixolydian"
   ];
 
   // Inizializzazione dello slider lineare a partire dal valore di volume master.
@@ -60,6 +73,15 @@
 </script>
 
 <div class="control-grid" data-master-volume={masterVolumeAttribute}>
+  <div class="control-unit crypto-selector">
+    <span class="label">Asset</span>
+    <select class="dropdown" value={currentCrypto} on:change={dispatchCrypto}>
+      {#each cryptoOptions as opt}
+        <option value={opt.symbol} selected={currentCrypto === opt.symbol}>{opt.label}</option>
+      {/each}
+    </select>
+  </div>
+
   <div class="control-unit volume-control">
     <div class="slider-header">
       <span class="label">Master Volume</span>

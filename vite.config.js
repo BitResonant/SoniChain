@@ -3,7 +3,7 @@ import { sveltekit } from "@sveltejs/kit/vite";
 import { copyFileSync } from "fs";
 import { resolve } from "path";
 
-const DSP_SRC = resolve("src/RNBO/DSP.json");
+const DSP_SRC = resolve("src/RNBO/DSP1.json");
 const DSP_DEST = resolve("static/DSP.export.json");
 
 function syncDspPlugin() {
@@ -12,9 +12,9 @@ function syncDspPlugin() {
     buildStart() {
       copyFileSync(DSP_SRC, DSP_DEST);
     },
-    configureServer(server) {
+    configureServer(/** @type {import('vite').ViteDevServer} */ server) {
       server.watcher.add(DSP_SRC);
-      server.watcher.on("change", (file) => {
+      server.watcher.on("change", (/** @type {string} */ file) => {
         if (file === DSP_SRC) {
           copyFileSync(DSP_SRC, DSP_DEST);
           server.ws.send({ type: "full-reload" });
