@@ -5,6 +5,7 @@
   import AudioControls from '../components/AudioControls.svelte';
 
   let cryptoData: number[] = Array(64).fill(0.5);
+  let pendingCalibration: boolean = false;
   let isCalibrating: boolean = false;
   let calibrationProgress: number = 0;
   let calibrationInterval: number;
@@ -14,8 +15,9 @@
   let rnboDevice: any = null;
   let isRnboReady: boolean = false;
   let streamIsReady: boolean = false;
+  let hasCalibrated: boolean = false;
 
-  let masterVolume: number = 0.8;
+  let masterVolume: number = 0;
   let currentScale: number = 0;
   let sensitivityStep: number = 1;
   let currentCrypto: string = 'btcusdt';
@@ -59,7 +61,9 @@
 
         // Calibration fires only when BOTH rnbo AND stream are ready.
         // If the stream connected before rnbo (streamIsReady already set), fire now.
-        if (streamIsReady) triggerCalibration();
+        if (streamIsReady) {
+          setTimeout(() => { pendingCalibration = true; }, 1000);
+        }
       } catch (err) {
         console.error('[Bootstrap] Initialization failed:', err);
       }
@@ -73,11 +77,23 @@
 
         cryptoWorker.onmessage = (event: MessageEvent) => {
           if (event.data.type === 'STREAM_READY') {
-            streamIsReady = true;
-            console.debug('[Worker -> Main] Stream ready — triggering recalibration');
-            // Calibration fires only when BOTH are ready.
-            // If rnbo connected before the stream (isRnboReady already set), fire now.
-            if (isRnboReady) triggerCalibration();
+            console.debug('[Worker -> Main] Stream ready');
+            if (isRnboReady) {
+              if (!hasCalibrated) {
+                // First startup: wait 1s, then start data flow and calibration together
+                // so the peak-follower in RNBO sees only clean data from t=0.
+                setTimeout(() => {
+                  streamIsReady = true;
+                  pendingCalibration = true;
+                }, 1000);
+              } else {
+                streamIsReady = true;
+                triggerCalibration();
+              }
+            } else {
+              // RNBO not ready yet — bootstrap will handle calibration
+              streamIsReady = true;
+            }
             return;
           }
 
@@ -143,21 +159,45 @@
     }
   }
 
+  function rampVolume(target: number, durationMs: number): void {
+    const start = masterVolume;
+    const t0 = performance.now();
+    function tick(now: number) {
+      const progress = Math.min((now - t0) / durationMs, 1);
+      masterVolume = start + (target - start) * progress;
+      setRnboParam('master_volume', masterVolume);
+      if (progress < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function startCalibration(): void {
+    pendingCalibration = false;
+    hasCalibrated = true;
+    triggerCalibration();
+  }
+
   function triggerCalibration(): void {
     if (!isRnboReady) {
       console.warn('[Calibration] Deferred - RNBO not ready yet');
       return;
     }
 
-    // Reset any ongoing calibration before starting a new one
     if (calibrationInterval) clearInterval(calibrationInterval);
+
+    masterVolume = 0;
+    setRnboParam('master_volume', 0);
 
     isCalibrating = true;
     calibrationProgress = 0;
     remainingSeconds = 30;
 
-    setRnboParam('scaling/recalibration', 1);
-    setTimeout(() => setRnboParam('scaling/recalibration', 0), 200);
+    // Force a clean 0→1 edge so RNBO's sel 1 fires regardless of previous state.
+    setRnboParam('scaling/recalibration', 0);
+    setTimeout(() => {
+      setRnboParam('scaling/recalibration', 1);
+      setTimeout(() => setRnboParam('scaling/recalibration', 0), 200);
+    }, 50);
 
     const totalDurationMs = 30000;
     const updateIntervalMs = 100;
@@ -171,6 +211,7 @@
         clearInterval(calibrationInterval);
         isCalibrating = false;
         calibrationProgress = 0;
+        rampVolume(0.5, 100);
       }
     }, updateIntervalMs);
   }
@@ -218,14 +259,19 @@
 </script>
 
 <main class="workspace">
-  {#if isCalibrating}
+  {#if pendingCalibration || isCalibrating}
     <div class="calibration-overlay">
       <div class="calibration-dialog">
-        <p class="calibration-text">Calibration in progress...</p>
-        <div class="progress-bar-container">
-          <div class="progress-bar-fill" style="width: {calibrationProgress}%"></div>
-        </div>
-        <p class="calibration-subtext">{remainingSeconds}s rimanenti</p>
+        {#if pendingCalibration}
+          <p class="calibration-text">Ready to Calibrate</p>
+          <button class="btn-calibrate" on:click={startCalibration}>Calibrate</button>
+        {:else}
+          <p class="calibration-text">Calibration in progress...</p>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" style="width: {calibrationProgress}%"></div>
+          </div>
+          <p class="calibration-subtext">{remainingSeconds}s rimanenti</p>
+        {/if}
       </div>
     </div>
   {/if}
@@ -364,6 +410,24 @@
     margin-top: 16px;
     color: #8e8e9b;
     font-size: 0.9rem;
+  }
+
+  .btn-calibrate {
+    margin-top: 8px;
+    background: transparent;
+    color: #00ff88;
+    border: 1px solid #00ff88;
+    padding: 12px 32px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    transition: all 0.2s ease;
+  }
+
+  .btn-calibrate:hover {
+    background: #00ff8820;
   }
 
   .visual-viewport {

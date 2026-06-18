@@ -34,8 +34,9 @@
     "Mixolydian"
   ];
 
-  // Inizializzazione dello slider lineare a partire dal valore di volume master.
-  let faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
+  // Reattivo al prop: si aggiorna sia al drag dell'utente che ai cambi programmatici dal genitore.
+  let faderValue: number;
+  $: faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
   let isDraggingVolume = false;
 
   const masterVolumeAttribute = masterVolume;
