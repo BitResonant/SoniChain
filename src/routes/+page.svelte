@@ -266,20 +266,86 @@
 
     cryptoWorker?.postMessage({ type: 'SWITCH', symbol });
   }
+
+  // ---- Help / suggerimenti contestuali ----------------------------------
+  // Testi fittizi: sostituiscili con le spiegazioni reali dei parametri.
+  const helpContent: Record<string, { title: string; body: string }> = {
+    asset: {
+      title: 'Asset',
+      body: 'Testo segnaposto per l’Asset. Qui scriverai la spiegazione della coppia di mercato selezionata e di come il suo flusso di prezzo alimenta il motore sonoro.'
+    },
+    volume: {
+      title: 'Master Volume',
+      body: 'Testo segnaposto per il Master Volume. Descrivi qui il controllo del livello d’uscita generale e la sua scala logaritmica.'
+    },
+    scale: {
+      title: 'Pitch Quantization Bank',
+      body: 'Testo segnaposto per il banco di quantizzazione. Spiega come le note generate vengono vincolate alla scala musicale scelta.'
+    },
+    sensitivity: {
+      title: 'Price Sensitivity',
+      body: 'Testo segnaposto per la Price Sensitivity. Indica come le variazioni di prezzo vengono mappate in modo più o meno marcato sui parametri sonori.'
+    },
+    recalibration: {
+      title: 'Recalibration',
+      body: 'Testo segnaposto per la Recalibration. Riconnette lo stream e ricalibra il range dinamico sul mercato corrente.'
+    },
+    chart: {
+      title: 'Signal Monitor',
+      body: 'Testo segnaposto per il grafico. Qui descriverai cosa rappresenta la curva del segnale e come leggerla.'
+    }
+  };
+
+  const defaultHelp = {
+    title: 'Suggerimenti',
+    body: 'Passa il mouse su un parametro per visualizzarne la spiegazione in questo riquadro.'
+  };
+
+  let activeHelpId: string | null = null;
+  function setHelp(id: string | null): void {
+    activeHelpId = id;
+  }
+  $: activeHelp = activeHelpId ? helpContent[activeHelpId] ?? defaultHelp : defaultHelp;
+
+  // ---- Etichette e stato derivati per l'header del grafico --------------
+  const assetLabels: Record<string, string> = {
+    btcusdt: 'BTC / USDT',
+    ethusdt: 'ETH / USDT',
+    usdtusdc: 'USDT / USDC',
+    bnbusdt: 'BNB / USDT',
+    usdcusdt: 'USDC / USDT'
+  };
+  $: assetLabel = assetLabels[currentCrypto] ?? currentCrypto.toUpperCase();
+
+  let chartStatus: 'live' | 'connecting' | 'idle';
+  $: chartStatus =
+    calibrationPhase === 'idle' && streamIsReady
+      ? 'live'
+      : calibrationPhase === 'initial-connecting' ||
+          calibrationPhase === 'recal-connecting' ||
+          calibrationPhase === 'calibrating'
+        ? 'connecting'
+        : 'idle';
 </script>
 
 <main class="workspace">
   {#if calibrationPhase !== 'idle'}
     <div class="calibration-overlay">
       <div class="calibration-dialog">
+        <div class="cal-glyph">
+          <span class="cal-ring"></span>
+          <span class="cal-core"></span>
+        </div>
         {#if calibrationPhase === 'initial-connecting'}
-          <p class="calibration-text">Connecting to websocket...</p>
+          <p class="calibration-text">Connecting to websocket</p>
+          <p class="calibration-subtext">Establishing market data stream…</p>
         {:else if calibrationPhase === 'pending-calibrate'}
           <p class="calibration-text">Ready to Calibrate</p>
+          <p class="calibration-subtext">Tune the engine to the current market range.</p>
           <button class="btn-calibrate" on:click={startCalibration}>Calibrate</button>
         {:else}
           <p class="calibration-text">
-            {calibrationPhase === 'recal-connecting' ? 'Connecting to websocket...' : 'Calibration in progress...'}
+            {calibrationPhase === 'recal-connecting' ? 'Connecting to websocket' : 'Calibration in progress'}
           </p>
           <div class="progress-bar-container">
             <div class="progress-bar-fill" style="width: {calibrationProgress}%"></div>
@@ -291,13 +357,41 @@
   {/if}
 
   <header class="app-header">
-    <h1>SoniFyer Core - Engine Standalone</h1>
-    <button class="btn-recal" on:click={triggerCalibration}>Recalibration</button>
+    <div class="brand">
+      <div class="brand-mark">
+        <span class="bar b1"></span>
+        <span class="bar b2"></span>
+        <span class="bar b3"></span>
+        <span class="bar b4"></span>
+      </div>
+      <div class="brand-text">
+        <h1>SoniFyer<span class="brand-accent">Core</span></h1>
+        <span class="brand-sub">Engine Standalone</span>
+      </div>
+    </div>
+
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <button
+      class="btn-recal"
+      on:click={triggerCalibration}
+      on:mouseenter={() => setHelp('recalibration')}
+      on:mouseleave={() => setHelp(null)}
+      on:focus={() => setHelp('recalibration')}
+      on:blur={() => setHelp(null)}
+    >
+      <span class="recal-dot"></span>
+      Recalibration
+    </button>
   </header>
 
   <div class="interface-layout">
-    <section class="visual-viewport">
-      <CryptoChart dataBuffer={cryptoData} />
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <section
+      class="visual-viewport"
+      on:mouseenter={() => setHelp('chart')}
+      on:mouseleave={() => setHelp(null)}
+    >
+      <CryptoChart dataBuffer={cryptoData} {assetLabel} status={chartStatus} />
     </section>
 
     <section class="control-viewport">
@@ -310,79 +404,251 @@
         onScaleChange={handleScale}
         onSensitivityChange={handleSensitivity}
         onCryptoChange={handleCryptoChange}
+        onHelpHover={setHelp}
       />
     </section>
   </div>
+
+  <footer class="help-bar" class:active={activeHelpId !== null}>
+    <div class="help-icon">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M9.5 9.2a2.5 2.5 0 1 1 3.4 2.3c-.7.3-1 .8-1 1.6" />
+        <line x1="12" y1="16.5" x2="12" y2="16.6" />
+      </svg>
+    </div>
+    <div class="help-body">
+      <span class="help-title">{activeHelp.title}</span>
+      <p class="help-text">{activeHelp.body}</p>
+    </div>
+  </footer>
 </main>
 
 <style>
+  :global(:root) {
+    --bg-0: #080b12;
+    --bg-1: #0b0f18;
+    --bg-2: #141925;
+    --bg-3: #1b2230;
+    --border: rgba(148, 163, 184, 0.1);
+    --border-strong: rgba(148, 163, 184, 0.18);
+    --text-hi: #eef1f7;
+    --text-mid: #9aa3b5;
+    --text-lo: #5d6678;
+    --accent: #2dd4bf;
+    --accent-2: #38bdf8;
+    --warn: #f5b53f;
+    --danger: #fb7185;
+  }
+
   :global(body) {
-    background-color: #08080a;
-    color: #e2e2e9;
-    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background:
+      radial-gradient(1100px 600px at 18% -10%, rgba(56, 189, 248, 0.07), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(45, 212, 191, 0.06), transparent 55%),
+      var(--bg-0);
+    color: var(--text-hi);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     margin: 0;
-    padding: 20px;
+    padding: 26px;
+    min-height: 100vh;
     user-select: none;
+    -webkit-font-smoothing: antialiased;
   }
 
   .workspace {
     position: relative;
-    max-width: 1200px;
+    max-width: 1240px;
     margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
   }
 
+  /* ---- Header ---- */
   .app-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid #1a1a24;
-    padding-bottom: 15px;
-    margin-bottom: 20px;
   }
 
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .brand-mark {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 34px;
+    width: 34px;
+    padding: 6px;
+    border-radius: 10px;
+    background: linear-gradient(160deg, rgba(45, 212, 191, 0.16), rgba(56, 189, 248, 0.08));
+    border: 1px solid var(--border-strong);
+    box-sizing: border-box;
+  }
+  .brand-mark .bar {
+    flex: 1;
+    border-radius: 2px;
+    background: linear-gradient(180deg, var(--accent-2), var(--accent));
+    animation: eq 1.2s ease-in-out infinite;
+  }
+  .brand-mark .b1 { height: 40%; animation-delay: 0s; }
+  .brand-mark .b2 { height: 85%; animation-delay: 0.15s; }
+  .brand-mark .b3 { height: 60%; animation-delay: 0.3s; }
+  .brand-mark .b4 { height: 95%; animation-delay: 0.45s; }
+
+  @keyframes eq {
+    0%, 100% { transform: scaleY(0.55); transform-origin: bottom; }
+    50% { transform: scaleY(1); transform-origin: bottom; }
+  }
+
+  .brand-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+  }
   h1 {
-    font-size: 1.4rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: -0.015em;
     margin: 0;
+    color: var(--text-hi);
+  }
+  .brand-accent {
+    color: var(--accent);
+    margin-left: 2px;
+  }
+  .brand-sub {
+    font-size: 0.66rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-lo);
+    font-weight: 600;
   }
 
   .btn-recal {
-    background: #1a1a24;
-    color: #ff3b30;
-    border: 1px solid #3a3a4c;
-    padding: 8px 16px;
-    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    background: var(--bg-2);
+    color: var(--text-hi);
+    border: 1px solid var(--border-strong);
+    padding: 10px 18px;
+    border-radius: 10px;
     cursor: pointer;
-    font-weight: 500;
-    transition: all 0.2s ease;
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition: all 0.18s ease;
   }
-
   .btn-recal:hover {
-    background: #2a2a3c;
-    border-color: #ff3b30;
+    border-color: var(--danger);
+    background: rgba(251, 113, 133, 0.08);
+  }
+  .recal-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--danger);
+    box-shadow: 0 0 8px var(--danger);
   }
 
+  /* ---- Layout ---- */
   .interface-layout {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 20px;
+    gap: 22px;
   }
 
-  @media (min-width: 768px) {
+  @media (min-width: 860px) {
     .interface-layout {
-      grid-template-columns: 2fr 1fr;
+      grid-template-columns: 1.85fr 1fr;
+      align-items: stretch;
     }
   }
 
+  .visual-viewport {
+    min-height: 380px;
+    display: flex;
+  }
+  .visual-viewport :global(.chart-card) {
+    flex: 1;
+  }
+
+  .control-viewport {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* ---- Help bar ---- */
+  .help-bar {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    min-height: 78px;
+    box-sizing: border-box;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .help-bar.active {
+    border-color: rgba(45, 212, 191, 0.35);
+    box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.12), 0 18px 40px -28px rgba(45, 212, 191, 0.5);
+  }
+
+  .help-icon {
+    flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    background: rgba(45, 212, 191, 0.1);
+    border: 1px solid rgba(45, 212, 191, 0.22);
+  }
+  .help-icon svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .help-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .help-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--accent);
+  }
+  .help-text {
+    margin: 0;
+    font-size: 0.86rem;
+    line-height: 1.5;
+    color: var(--text-mid);
+    max-width: 90ch;
+  }
+
+  /* ---- Calibration overlay ---- */
   .calibration-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    background: rgba(5, 5, 8, 0.94);
-    backdrop-filter: blur(10px);
+    inset: 0;
+    background: rgba(6, 9, 14, 0.86);
+    backdrop-filter: blur(14px);
     z-index: 9999;
     display: flex;
     justify-content: center;
@@ -390,67 +656,96 @@
   }
 
   .calibration-dialog {
-    background: #121218;
-    border: 1px solid #222230;
-    padding: 40px;
-    border-radius: 12px;
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    border: 1px solid var(--border-strong);
+    padding: 38px 40px;
+    border-radius: 18px;
     text-align: center;
-    width: 320px;
+    width: 340px;
+    box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.9);
+  }
+
+  .cal-glyph {
+    position: relative;
+    width: 54px;
+    height: 54px;
+    margin: 0 auto 22px;
+  }
+  .cal-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid rgba(45, 212, 191, 0.25);
+    border-top-color: var(--accent);
+    animation: spin 1s linear infinite;
+  }
+  .cal-core {
+    position: absolute;
+    inset: 18px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 18px var(--accent);
+    animation: pulse-core 1.6s ease-in-out infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes pulse-core {
+    0%, 100% { opacity: 0.5; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1); }
   }
 
   .calibration-text {
-    font-size: 1.1rem;
+    font-size: 1.08rem;
     font-weight: 600;
-    color: #ffffff;
-    margin-bottom: 20px;
-    letter-spacing: 0.05em;
+    color: var(--text-hi);
+    margin: 0 0 8px;
+    letter-spacing: 0.01em;
   }
 
   .progress-bar-container {
     width: 100%;
     height: 6px;
-    background: #1c1c24;
+    background: var(--bg-3);
     border-radius: 3px;
+    overflow: hidden;
+    margin-top: 18px;
   }
-
   .progress-bar-fill {
     height: 100%;
-    background: linear-gradient(90deg, #00ff88, #0a8ef0);
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
     border-radius: 3px;
     transition: width 0.1s linear;
+    box-shadow: 0 0 12px rgba(45, 212, 191, 0.6);
   }
 
   .calibration-subtext {
-    margin-top: 16px;
-    color: #8e8e9b;
-    font-size: 0.9rem;
+    margin: 12px 0 0;
+    color: var(--text-lo);
+    font-size: 0.84rem;
   }
 
   .btn-calibrate {
-    margin-top: 8px;
-    background: transparent;
-    color: #00ff88;
-    border: 1px solid #00ff88;
-    padding: 12px 32px;
-    border-radius: 8px;
+    margin-top: 22px;
+    width: 100%;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #06231f;
+    border: none;
+    padding: 13px 32px;
+    border-radius: 10px;
     cursor: pointer;
-    font-size: 1rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    transition: all 0.2s ease;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    transition: transform 0.12s ease, box-shadow 0.18s ease;
+    box-shadow: 0 10px 26px -10px rgba(45, 212, 191, 0.7);
   }
-
   .btn-calibrate:hover {
-    background: #00ff8820;
+    transform: translateY(-1px);
+    box-shadow: 0 14px 32px -10px rgba(45, 212, 191, 0.85);
   }
-
-  .visual-viewport {
-    min-height: 360px;
-  }
-
-  .control-viewport {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
+  .btn-calibrate:active {
+    transform: translateY(0);
   }
 </style>

@@ -10,6 +10,9 @@
   export let onCryptoChange: (symbol: string) => void;
   export let currentCrypto: string;
 
+  // Notifica il genitore di quale parametro è attualmente sotto al mouse (o null).
+  export let onHelpHover: (id: string | null) => void = () => {};
+
   const cryptoOptions = [
     { label: 'Bitcoin',   symbol: 'btcusdt'  },
     { label: 'Ethereum',  symbol: 'ethusdt'  },
@@ -37,9 +40,6 @@
   // Reattivo al prop: si aggiorna sia al drag dell'utente che ai cambi programmatici dal genitore.
   let faderValue: number;
   $: faderValue = Math.max(1.0, Math.min(10.0, Math.pow(10, masterVolume)));
-  let isDraggingVolume = false;
-
-  const masterVolumeAttribute = masterVolume;
 
   function dispatchVolume(event: Event): void {
     const target = event.target as HTMLInputElement;
@@ -48,14 +48,6 @@
     const logMappedVolume = Math.log10(faderValue);
     console.debug(`[AudioControls] Volume slider: ${faderValue} -> ${logMappedVolume}`);
     onVolumeChange(logMappedVolume);
-  }
-
-  function onVolumeMouseDown(): void {
-    isDraggingVolume = true;
-  }
-
-  function onVolumeMouseUp(): void {
-    isDraggingVolume = false;
   }
 
   function dispatchScale(event: Event): void {
@@ -71,48 +63,92 @@
     console.debug(`[AudioControls] Sensitivity changed to: ${sensitivityValue}`);
     onSensitivityChange(sensitivityValue);
   }
+
+  // Percentuale per il riempimento visivo della traccia dei fader.
+  $: volumePct = ((faderValue - 1) / 9) * 100;
+  $: sensitivityPct = (sensitivityStep / 2) * 100;
 </script>
 
-<div class="control-grid" data-master-volume={masterVolumeAttribute}>
-  <div class="control-unit crypto-selector">
-    <span class="label">Asset</span>
-    <select class="dropdown" value={currentCrypto} on:change={dispatchCrypto}>
-      {#each cryptoOptions as opt}
-        <option value={opt.symbol} selected={currentCrypto === opt.symbol}>{opt.label}</option>
-      {/each}
-    </select>
+<div class="control-grid">
+  <div class="panel-head">
+    <span class="panel-title">Audio Engine</span>
+    <span class="panel-sub">Sonification Parameters</span>
   </div>
 
-  <div class="control-unit volume-control">
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div
+    class="control-unit"
+    role="group"
+    on:mouseenter={() => onHelpHover('asset')}
+    on:mouseleave={() => onHelpHover(null)}
+    on:focusin={() => onHelpHover('asset')}
+    on:focusout={() => onHelpHover(null)}
+  >
+    <span class="label">Asset</span>
+    <div class="select-wrap">
+      <select class="dropdown" value={currentCrypto} on:change={dispatchCrypto}>
+        {#each cryptoOptions as opt}
+          <option value={opt.symbol} selected={currentCrypto === opt.symbol}>{opt.label}</option>
+        {/each}
+      </select>
+      <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" /></svg>
+    </div>
+  </div>
+
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div
+    class="control-unit"
+    role="group"
+    on:mouseenter={() => onHelpHover('volume')}
+    on:mouseleave={() => onHelpHover(null)}
+    on:focusin={() => onHelpHover('volume')}
+    on:focusout={() => onHelpHover(null)}
+  >
     <div class="slider-header">
       <span class="label">Master Volume</span>
       <span class="value">{Math.round(Math.log10(faderValue) * 100)}%</span>
     </div>
-    <input 
-      type="range" 
-      class="linear-fader"
-      min="1.0" 
-      max="10.0" 
-      step="0.01" 
-      bind:value={faderValue} 
+    <input
+      type="range"
+      class="fader"
+      style="--fill: {volumePct}%"
+      min="1.0"
+      max="10.0"
+      step="0.01"
+      bind:value={faderValue}
       on:input={dispatchVolume}
-      on:mousedown={onVolumeMouseDown}
-      on:mouseup={onVolumeMouseUp}
-      on:touchstart={onVolumeMouseDown}
-      on:touchend={onVolumeMouseUp}
     />
   </div>
 
-  <div class="control-unit scale-selector">
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div
+    class="control-unit"
+    role="group"
+    on:mouseenter={() => onHelpHover('scale')}
+    on:mouseleave={() => onHelpHover(null)}
+    on:focusin={() => onHelpHover('scale')}
+    on:focusout={() => onHelpHover(null)}
+  >
     <span class="label">Pitch Quantization Bank</span>
-    <select class="dropdown" value={currentScale} on:change={dispatchScale}>
-      {#each scaleNames as scale, index}
-        <option value={index} selected={currentScale === index}>{scale}</option>
-      {/each}
-    </select>
+    <div class="select-wrap">
+      <select class="dropdown" value={currentScale} on:change={dispatchScale}>
+        {#each scaleNames as scale, index}
+          <option value={index} selected={currentScale === index}>{scale}</option>
+        {/each}
+      </select>
+      <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" /></svg>
+    </div>
   </div>
 
-  <div class="control-unit sensitivity-knob">
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div
+    class="control-unit"
+    role="group"
+    on:mouseenter={() => onHelpHover('sensitivity')}
+    on:mouseleave={() => onHelpHover(null)}
+    on:focusin={() => onHelpHover('sensitivity')}
+    on:focusout={() => onHelpHover(null)}
+  >
     <div class="slider-header">
       <span class="label">Price Sensitivity</span>
       <span class="value">
@@ -123,19 +159,20 @@
       </span>
     </div>
     <div class="step-container">
-      <input 
-        type="range" 
-        class="step-slider"
-        min="0" 
-        max="2" 
-        step="1" 
-        value={sensitivityStep} 
-        on:input={dispatchSensitivity} 
+      <input
+        type="range"
+        class="fader step"
+        style="--fill: {sensitivityPct}%"
+        min="0"
+        max="2"
+        step="1"
+        value={sensitivityStep}
+        on:input={dispatchSensitivity}
       />
       <div class="step-markers">
-        <span class="marker">L</span>
-        <span class="marker">M</span>
-        <span class="marker">H</span>
+        <span class="marker" class:active={sensitivityStep === 0}>LOW</span>
+        <span class="marker" class:active={sensitivityStep === 1}>MED</span>
+        <span class="marker" class:active={sensitivityStep === 2}>HIGH</span>
       </div>
     </div>
   </div>
@@ -145,32 +182,63 @@
   .control-grid {
     display: flex;
     flex-direction: column;
-    gap: 24px;
-    background: #0f0f13;
-    padding: 24px;
-    border-radius: 8px;
-    border: 1px solid #1c1c24;
-    box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);
+    gap: 22px;
+    background: var(--bg-2, #141925);
+    padding: 22px;
+    border-radius: 14px;
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+    box-shadow: 0 20px 50px -28px rgba(0, 0, 0, 0.9);
+  }
+
+  .panel-head {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+  }
+
+  .panel-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-hi, #eef1f7);
+    letter-spacing: 0.01em;
+  }
+
+  .panel-sub {
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-lo, #5d6678);
+    font-weight: 500;
   }
 
   .control-unit {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
+    padding: 4px;
+    margin: -4px;
+    border-radius: 10px;
+    transition: background 0.18s ease;
+  }
+  .control-unit:hover {
+    background: rgba(255, 255, 255, 0.025);
   }
 
   .label {
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     font-weight: 600;
     text-transform: uppercase;
-    color: #8e8e9b;
-    letter-spacing: 0.05em;
+    color: var(--text-mid, #9aa3b5);
+    letter-spacing: 0.08em;
   }
 
   .value {
-    font-size: 0.8rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
     font-weight: 500;
-    color: #ffffff;
+    color: var(--accent, #2dd4bf);
     font-variant-numeric: tabular-nums;
   }
 
@@ -180,44 +248,72 @@
     align-items: center;
   }
 
-  /* Styling Input Range */
-  input[type="range"] {
+  /* ---- Fader ---- */
+  input[type='range'] {
     appearance: none;
     -webkit-appearance: none;
     width: 100%;
+    height: 22px;
     background: transparent;
+    cursor: pointer;
   }
-
-  input[type="range"]:focus {
+  input[type='range']:focus {
     outline: none;
   }
 
-  /* Traccia Slider Generale */
-  input[type="range"]::-webkit-slider-runnable-track {
-    width: 100%;
+  .fader::-webkit-slider-runnable-track {
     height: 6px;
-    cursor: pointer;
-    background: #25252f;
     border-radius: 3px;
+    background: linear-gradient(
+      to right,
+      var(--accent, #2dd4bf) 0%,
+      var(--accent-2, #38bdf8) var(--fill, 0%),
+      var(--bg-3, #1b2230) var(--fill, 0%),
+      var(--bg-3, #1b2230) 100%
+    );
+  }
+  .fader::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-3, #1b2230);
+  }
+  .fader::-moz-range-progress {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--accent, #2dd4bf);
   }
 
-  input[type="range"]::-webkit-slider-thumb {
-    height: 18px;
-    width: 18px;
-    border-radius: 50%;
-    background: #e2e2e9;
-    cursor: pointer;
+  .fader::-webkit-slider-thumb {
     -webkit-appearance: none;
-    margin-top: -6px;
-    border: 2px solid #0f0f13;
+    height: 16px;
+    width: 16px;
+    margin-top: -5px;
+    border-radius: 50%;
+    background: #f4f7fb;
+    border: 2px solid var(--accent, #2dd4bf);
+    box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.14), 0 2px 6px rgba(0, 0, 0, 0.5);
+    transition: box-shadow 0.15s ease, transform 0.1s ease;
+  }
+  .fader::-webkit-slider-thumb:hover {
+    box-shadow: 0 0 0 6px rgba(45, 212, 191, 0.2), 0 2px 8px rgba(0, 0, 0, 0.6);
+  }
+  .fader:active::-webkit-slider-thumb {
+    transform: scale(1.08);
+  }
+  .fader::-moz-range-thumb {
+    height: 16px;
+    width: 16px;
+    border-radius: 50%;
+    background: #f4f7fb;
+    border: 2px solid var(--accent, #2dd4bf);
+    box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.14);
   }
 
-  /* Discretizzazione Step (Sensitivity) */
+  /* ---- Step (Sensitivity) ---- */
   .step-container {
     position: relative;
-    padding-bottom: 20px;
+    padding-bottom: 18px;
   }
-  
   .step-markers {
     position: absolute;
     bottom: 0;
@@ -225,32 +321,57 @@
     width: 100%;
     display: flex;
     justify-content: space-between;
-    padding: 0 4px;
-    box-sizing: border-box;
   }
-
   .marker {
-    font-size: 0.65rem;
-    color: #6a6a75;
-    font-weight: bold;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    color: var(--text-lo, #5d6678);
+    font-weight: 600;
+    transition: color 0.15s ease;
+  }
+  .marker.active {
+    color: var(--accent, #2dd4bf);
   }
 
-  /* Selettore Scala */
+  /* ---- Dropdown ---- */
+  .select-wrap {
+    position: relative;
+  }
   .dropdown {
     width: 100%;
-    background: #18181f;
-    color: #ffffff;
-    border: 1px solid #2a2a35;
-    padding: 10px 12px;
-    font-size: 0.9rem;
-    border-radius: 6px;
+    background: var(--bg-3, #1b2230);
+    color: var(--text-hi, #eef1f7);
+    border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.12));
+    padding: 11px 36px 11px 13px;
+    font-size: 0.88rem;
+    font-family: inherit;
+    border-radius: 9px;
     appearance: none;
+    -webkit-appearance: none;
     cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
   }
-
+  .dropdown:hover {
+    border-color: rgba(45, 212, 191, 0.4);
+  }
   .dropdown:focus {
     outline: none;
-    border-color: #4a4a5a;
+    border-color: var(--accent, #2dd4bf);
+    background: var(--bg-1, #0e1119);
   }
-
+  .chevron {
+    position: absolute;
+    right: 13px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 12px;
+    height: 12px;
+    pointer-events: none;
+    fill: none;
+    stroke: var(--text-mid, #9aa3b5);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
 </style>
