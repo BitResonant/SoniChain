@@ -5,6 +5,19 @@
   import AudioControls from '../components/AudioControls.svelte';
   import OutputScope from '../components/OutputScope.svelte';
   import { THEMES, THEME_LABELS, type ThemeName } from '../themes';
+  import { fade } from 'svelte/transition';
+  import { help, HELP, helpEnabled, activeHelp } from '../help';
+
+  // Posiziona la bolla d'aiuto vicino all'elemento sorgente (coord. viewport).
+  function bubbleStyle(rect: DOMRect): string {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const half = 130;
+    const cx = Math.max(half + 8, Math.min(vw - half - 8, rect.left + rect.width / 2));
+    return rect.top > vh * 0.5
+      ? `left:${cx}px; top:${rect.top - 8}px; transform:translate(-50%,-100%);`
+      : `left:${cx}px; top:${rect.bottom + 8}px; transform:translate(-50%,0);`;
+  }
 
   // ---- Asset / scale tables ----
   const ASSETS = [
@@ -383,10 +396,17 @@
           <span class="tb-sub">DSP · Crypto data sonification</span>
         </div>
       </div>
-      <div class="theme-switch">
-        {#each THEME_LABELS as t}
-          <button class:active={themeName === t.key} on:click={() => (themeName = t.key)}>{t.label}</button>
-        {/each}
+      <div class="tb-right">
+        <label class="help-toggle">
+          <input type="checkbox" bind:checked={$helpEnabled} />
+          <span class="toggle-track"><span class="toggle-knob"></span></span>
+          <span class="toggle-text">Show help bubbles</span>
+        </label>
+        <div class="theme-switch" use:help={HELP.theme}>
+          {#each THEME_LABELS as t}
+            <button class:active={themeName === t.key} on:click={() => (themeName = t.key)}>{t.label}</button>
+          {/each}
+        </div>
       </div>
     </div>
 
@@ -499,6 +519,12 @@
       {/if}
     </div>
   </div>
+
+  {#if $helpEnabled && $activeHelp}
+    <div class="help-bubble" style={bubbleStyle($activeHelp.rect)} transition:fade={{ duration: 120 }}>
+      {$activeHelp.text}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -565,6 +591,73 @@
     text-transform: uppercase;
     color: var(--faint);
   }
+  .tb-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .help-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .help-toggle input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .toggle-track {
+    position: relative;
+    width: 30px;
+    height: 16px;
+    flex: none;
+    border-radius: 8px;
+    background: var(--elev);
+    border: 1px solid var(--lineSoft);
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .toggle-knob {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--faint);
+    transition: transform 0.15s, background 0.15s;
+  }
+  .help-toggle input:checked + .toggle-track {
+    background: var(--accentSoft);
+    border-color: var(--accent);
+  }
+  .help-toggle input:checked + .toggle-track .toggle-knob {
+    transform: translateX(14px);
+    background: var(--accent);
+  }
+  .toggle-text {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+
+  .help-bubble {
+    position: fixed;
+    z-index: 200;
+    max-width: 260px;
+    padding: 9px 12px;
+    background: var(--elev);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+    pointer-events: none;
+  }
+
   .theme-switch {
     display: flex;
     align-items: center;

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import type { Theme } from '../themes';
+  import { help, HELP } from '../help';
 
   export let theme: Theme;
   // Nodi di analisi reali sul bus d'uscita audio.
@@ -110,8 +111,8 @@
       : `left:${50 - Math.abs(flowImbalance) * 50}%; right:50%;`;
 
   $: modelParams = [
-    { label: 'Volatility', pct: Math.round(volPctVal) },
-    { label: 'Density', pct: Math.round(densPctVal) }
+    { label: 'Volatility', pct: Math.round(volPctVal), help: HELP.volatility },
+    { label: 'Density', pct: Math.round(densPctVal), help: HELP.density }
   ];
 
   function fit(): void {
@@ -306,11 +307,11 @@
 
 <div class="scope-panel">
   <div class="scope-row">
-    <div class="osc">
+    <div class="osc" use:help={HELP.waveform}>
       <span class="micro-label">Output · Waveform</span>
       <div class="osc-wrap"><canvas bind:this={scopeCanvas}></canvas></div>
     </div>
-    <div class="gonio">
+    <div class="gonio" use:help={HELP.vector}>
       <div class="gonio-head">
         <span class="micro-label">Vector</span>
         <span class="width-label" bind:this={widthLabelEl}>0% W</span>
@@ -320,7 +321,7 @@
   </div>
 
   <div class="bottom-row">
-    <div class="flow">
+    <div class="flow" use:help={HELP.orderflow}>
       <div class="flow-head">
         <span class="nano-label">Order Flow Imbalance</span>
         <span class="flow-val" style="color:{flowColor}">{flowText}</span>
@@ -338,7 +339,7 @@
 
     <div class="model-params">
       {#each modelParams as m}
-        <div class="param">
+        <div class="param" use:help={m.help}>
           <span class="nano-label">{m.label}</span>
           <span class="param-val">{m.pct}</span>
           <div class="param-track"><div class="param-fill" style="width:{m.pct}%"></div></div>

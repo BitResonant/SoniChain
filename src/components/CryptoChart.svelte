@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import type { Theme } from '../themes';
+  import { help, HELP } from '../help';
 
   export let dataBuffer: number[] = [];
   export let theme: Theme;
@@ -168,7 +169,7 @@
   });
 </script>
 
-<div class="chart-panel">
+<div class="chart-panel" use:help={HELP.chart}>
   <canvas bind:this={canvas}></canvas>
   <span class="corner-label">Price · 64-tick window</span>
 </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { help, HELP } from '../help';
 
   export let assets: { symbol: string; label: string; sym: string }[] = [];
   export let currentCrypto: string;
@@ -80,7 +81,7 @@
   <!-- header -->
   <div class="panel-head">
     <span class="head-title">Audio engine</span>
-    <button class="play-btn" class:on={playing} on:click={onTogglePlay}>
+    <button class="play-btn" class:on={playing} on:click={onTogglePlay} use:help={HELP.live}>
       <span class="play-dot"></span>{playing ? 'Live' : 'Paused'}
     </button>
   </div>
@@ -92,7 +93,7 @@
       <span class="label">Asset</span>
       <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
       <div class="dd" on:click|stopPropagation>
-        <button class="dd-trigger" on:click={toggleAssetMenu}>
+        <button class="dd-trigger" on:click={toggleAssetMenu} use:help={HELP.asset}>
           <span class="dd-trigger-main">
             <span class="dd-label">{currentAsset.label}</span>
             <span class="dd-sym">{currentAsset.sym}</span>
@@ -131,6 +132,7 @@
         aria-valuemax="100"
         aria-valuenow={Math.round(volume * 100)}
         on:pointerdown={onFaderDown}
+        use:help={HELP.volume}
       >
         <div class="fader-track"></div>
         <div class="fader-fill" style="width:{volPct}"></div>
@@ -157,7 +159,7 @@
       <span class="label">scale selector</span>
       <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
       <div class="dd" on:click|stopPropagation>
-        <button class="dd-trigger" on:click={toggleScaleMenu}>
+        <button class="dd-trigger" on:click={toggleScaleMenu} use:help={HELP.scale}>
           <span class="dd-label">{scaleName}</span>
           <span class="chev">▾</span>
         </button>
@@ -179,7 +181,7 @@
         <span class="label">sensitivity</span>
         <span class="mono-val sm">{SENS[sensitivityStep]}</span>
       </div>
-      <div class="seg">
+      <div class="seg" use:help={HELP.sensitivity}>
         {#each SENS as label, i}
           <button class="seg-btn" class:active={i === sensitivityStep} on:click={() => onSensitivityChange(i)}>{label}</button>
         {/each}
@@ -190,7 +192,7 @@
   <!-- footer -->
   <div class="panel-foot">
     <span class="status"><span class="status-dot" class:on={calibrated}></span>{statusText}</span>
-    <button class="recal-btn" on:click={onRecalibrate}>Recalibrate</button>
+    <button class="recal-btn" on:click={onRecalibrate} use:help={HELP.recalibrate}>Recalibrate</button>
   </div>
 </div>
 
