@@ -5,8 +5,9 @@
   import AudioControls from '../components/AudioControls.svelte';
 
   let cryptoData: number[] = Array(64).fill(0.5);
-  let pendingCalibration: boolean = false;
-  let isCalibrating: boolean = false;
+
+  type CalibrationPhase = 'initial-connecting' | 'pending-calibrate' | 'recal-connecting' | 'calibrating' | 'idle';
+  let calibrationPhase: CalibrationPhase = 'initial-connecting';
   let calibrationProgress: number = 0;
   let calibrationInterval: number;
   let remainingSeconds: number = 30;
@@ -17,6 +18,10 @@
   let streamIsReady: boolean = false;
   let hasCalibrated: boolean = false;
 
+  // Both must be true before the Calibrate button appears on first load.
+  let initialConnectStreamReady: boolean = false;
+  let initialConnectTimerDone: boolean = false;
+
   let masterVolume: number = 0;
   let currentScale: number = 0;
   let sensitivityStep: number = 1;
@@ -24,46 +29,52 @@
 
   let cryptoWorker: Worker | null = null;
 
+  function maybeShowCalibrate(): void {
+    if (!isRnboReady || !initialConnectStreamReady || !initialConnectTimerDone) return;
+    if (calibrationPhase === 'initial-connecting') {
+      calibrationPhase = 'pending-calibrate';
+    }
+  }
+
   onMount(() => {
+    // Minimum 3-second "Connecting..." display on first load.
+    setTimeout(() => {
+      initialConnectTimerDone = true;
+      maybeShowCalibrate();
+    }, 3000);
+
     const bootstrap = async () => {
       try {
         console.log('[Bootstrap] Starting RNBO initialization...');
-        
+
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         audioContext = new AudioContextClass({ latencyHint: 'interactive' });
         console.log('[AudioContext] Created with state:', audioContext?.state);
 
         const response = await fetch(`/DSP.export.json?v=${Date.now()}`);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch DSP.export.json: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`Failed to fetch DSP.export.json: ${response.status}`);
         const patcher = await response.json();
         console.log('[Bootstrap] DSP patcher loaded');
 
         rnboDevice = await RNBO.createDevice({ context: audioContext, patcher });
         console.log('[RNBO] Device created successfully');
         console.log('[RNBO] Available parameters:', Array.from(rnboDevice.parametersById.keys()));
-        
+
         rnboDevice.node.connect(audioContext.destination);
-        
+
         if (audioContext?.state === 'suspended') {
           await audioContext.resume();
           console.log('[AudioContext] Resumed from suspended state');
         }
-        
+
         isRnboReady = true;
         console.log('[Bootstrap] RNBO initialization complete - device ready');
 
-        // Now safe to set initial parameters
         setRnboParam('master_volume', masterVolume);
         setRnboParam('scaling/sensitivity', sensitivityStep);
         setRnboParam('resonators/scales/scale_selector', currentScale);
 
-        // Calibration fires only when BOTH rnbo AND stream are ready.
-        // If the stream connected before rnbo (streamIsReady already set), fire now.
-        if (streamIsReady) {
-          pendingCalibration = true;
-        }
+        maybeShowCalibrate();
       } catch (err) {
         console.error('[Bootstrap] Initialization failed:', err);
       }
@@ -78,16 +89,17 @@
         cryptoWorker.onmessage = (event: MessageEvent) => {
           if (event.data.type === 'STREAM_READY') {
             console.debug('[Worker -> Main] Stream ready');
-            if (isRnboReady) {
-              streamIsReady = true;
-              if (!hasCalibrated) {
-                pendingCalibration = true;
-              } else {
-                triggerCalibration();
-              }
+            streamIsReady = true;
+
+            if (!hasCalibrated) {
+              initialConnectStreamReady = true;
+              if (isRnboReady) maybeShowCalibrate();
             } else {
-              // RNBO not ready yet — bootstrap will handle calibration
-              streamIsReady = true;
+              // Recalibration reconnect: switch phase and fire RNBO signal.
+              if (calibrationPhase === 'recal-connecting') {
+                calibrationPhase = 'calibrating';
+                triggerRnboRecalibration();
+              }
             }
             return;
           }
@@ -96,7 +108,6 @@
             const { price, market_volume, density, maker_side, volatility } = event.data.data;
             console.debug('[Worker -> Main] Tick received', { price, market_volume, density, maker_side, volatility });
 
-            // Only send to RNBO if device is ready AND stream is confirmed coherent
             if (isRnboReady && rnboDevice && streamIsReady) {
               logRnboMessage('WORKER', 'price', price);
               setRnboParam('price', price);
@@ -110,7 +121,6 @@
               setRnboParam('volatility', volatility);
             }
 
-            // Always update the display
             const displayNormalized = Math.max(0.0, Math.min(1.0, (price % 1000) / 1000));
             cryptoData = [...cryptoData.slice(1), displayNormalized];
           }
@@ -120,10 +130,7 @@
       }
     };
 
-    // Run bootstrap
     bootstrap();
-    
-    // Start crypto worker in parallel (doesn't depend on RNBO)
     initCryptoWorker();
 
     return () => {
@@ -166,51 +173,56 @@
     requestAnimationFrame(tick);
   }
 
-  function startCalibration(): void {
-    // The button click is a user gesture — resume AudioContext if still suspended.
-    audioContext?.resume();
-    pendingCalibration = false;
-    hasCalibrated = true;
-    triggerCalibration();
-  }
-
-  function triggerCalibration(): void {
-    if (!isRnboReady) {
-      console.warn('[Calibration] Deferred - RNBO not ready yet');
-      return;
-    }
-
+  function startCalibrationTimer(): void {
     if (calibrationInterval) clearInterval(calibrationInterval);
-
-    masterVolume = 0;
-    setRnboParam('master_volume', 0);
-
-    isCalibrating = true;
     calibrationProgress = 0;
     remainingSeconds = 30;
+    const totalDurationMs = 30000;
+    const updateIntervalMs = 100;
+    const step = (updateIntervalMs / totalDurationMs) * 100;
+    calibrationInterval = window.setInterval(() => {
+      calibrationProgress += step;
+      remainingSeconds = Math.ceil((30 * (100 - calibrationProgress)) / 100);
+      if (calibrationProgress >= 100) {
+        clearInterval(calibrationInterval);
+        calibrationPhase = 'idle';
+        calibrationProgress = 0;
+        rampVolume(0.5, 100);
+      }
+    }, updateIntervalMs);
+  }
 
-    // Force a clean 0→1 edge so RNBO's sel 1 fires regardless of previous state.
+  function triggerRnboRecalibration(): void {
     setRnboParam('scaling/recalibration', 0);
     setTimeout(() => {
       setRnboParam('scaling/recalibration', 1);
       setTimeout(() => setRnboParam('scaling/recalibration', 0), 200);
     }, 50);
+  }
 
-    const totalDurationMs = 30000;
-    const updateIntervalMs = 100;
-    const step = (updateIntervalMs / totalDurationMs) * 100;
+  // Called by the "Calibrate" button on first load.
+  function startCalibration(): void {
+    audioContext?.resume();
+    hasCalibrated = true;
+    calibrationPhase = 'calibrating';
+    startCalibrationTimer();
+    triggerRnboRecalibration();
+  }
 
-    calibrationInterval = window.setInterval(() => {
-      calibrationProgress += step;
-      remainingSeconds = Math.ceil((30 * (100 - calibrationProgress)) / 100);
-
-      if (calibrationProgress >= 100) {
-        clearInterval(calibrationInterval);
-        isCalibrating = false;
-        calibrationProgress = 0;
-        rampVolume(0.5, 100);
-      }
-    }, updateIntervalMs);
+  // Called by the "Recalibration" header button.
+  // Reconnects the websocket so STREAM_READY fires the RNBO signal once data is clean.
+  // The visual timer starts immediately so the progress bar is visible during the connect phase.
+  function triggerCalibration(): void {
+    if (!isRnboReady) {
+      console.warn('[Calibration] Deferred - RNBO not ready yet');
+      return;
+    }
+    masterVolume = 0;
+    setRnboParam('master_volume', 0);
+    streamIsReady = false;
+    calibrationPhase = 'recal-connecting';
+    startCalibrationTimer();
+    cryptoWorker?.postMessage({ type: 'SWITCH', symbol: currentCrypto });
   }
 
   function handleVolume(linear: number) {
@@ -225,9 +237,7 @@
     const scaleValue = Number(index);
     console.debug(`[UI] Scale changed to: ${scaleValue}`);
     logRnboMessage('UI', 'resonators/scales/scale_selector', scaleValue);
-    if (isRnboReady) {
-      setRnboParam('resonators/scales/scale_selector', scaleValue);
-    }
+    if (isRnboReady) setRnboParam('resonators/scales/scale_selector', scaleValue);
   }
 
   function handleSensitivity(step: number) {
@@ -235,39 +245,46 @@
     const sensitivityValue = Number(step);
     console.debug(`[UI] Sensitivity changed to: ${sensitivityValue}`);
     logRnboMessage('UI', 'scaling/sensitivity', sensitivityValue);
-    if (isRnboReady) {
-      setRnboParam('scaling/sensitivity', sensitivityValue);
-    }
+    if (isRnboReady) setRnboParam('scaling/sensitivity', sensitivityValue);
   }
 
   function handleCryptoChange(symbol: string) {
     if (symbol === currentCrypto) return;
     currentCrypto = symbol;
-    console.debug(`[UI] Crypto switched to: ${symbol} — pausing RNBO data flow`);
-
-    // Stop sending data to RNBO immediately — prevents dirty first-ticks
-    // from the new stream from poisoning the adaptive threshold calibration.
-    // Data resumes only when STREAM_READY arrives (after 2 coherent ticks).
     streamIsReady = false;
+
+    if (hasCalibrated) {
+      masterVolume = 0;
+      setRnboParam('master_volume', 0);
+      calibrationPhase = 'recal-connecting';
+      startCalibrationTimer();
+    } else {
+      // Still in initial flow — go back to connecting state for the new symbol.
+      initialConnectStreamReady = false;
+      calibrationPhase = 'initial-connecting';
+    }
 
     cryptoWorker?.postMessage({ type: 'SWITCH', symbol });
   }
-
 </script>
 
 <main class="workspace">
-  {#if pendingCalibration || isCalibrating}
+  {#if calibrationPhase !== 'idle'}
     <div class="calibration-overlay">
       <div class="calibration-dialog">
-        {#if pendingCalibration}
+        {#if calibrationPhase === 'initial-connecting'}
+          <p class="calibration-text">Connecting to websocket...</p>
+        {:else if calibrationPhase === 'pending-calibrate'}
           <p class="calibration-text">Ready to Calibrate</p>
           <button class="btn-calibrate" on:click={startCalibration}>Calibrate</button>
         {:else}
-          <p class="calibration-text">Calibration in progress...</p>
+          <p class="calibration-text">
+            {calibrationPhase === 'recal-connecting' ? 'Connecting to websocket...' : 'Calibration in progress...'}
+          </p>
           <div class="progress-bar-container">
             <div class="progress-bar-fill" style="width: {calibrationProgress}%"></div>
           </div>
-          <p class="calibration-subtext">{remainingSeconds}s rimanenti</p>
+          <p class="calibration-subtext">{remainingSeconds}s remaining</p>
         {/if}
       </div>
     </div>
