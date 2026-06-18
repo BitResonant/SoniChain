@@ -79,7 +79,7 @@
 <div class="panel">
   <!-- header -->
   <div class="panel-head">
-    <span class="head-title">Engine</span>
+    <span class="head-title">Audio engine</span>
     <button class="play-btn" class:on={playing} on:click={onTogglePlay}>
       <span class="play-dot"></span>{playing ? 'Live' : 'Paused'}
     </button>
@@ -119,7 +119,7 @@
     <!-- MASTER VOLUME -->
     <div class="field">
       <div class="row">
-        <span class="label">Master Volume</span>
+        <span class="label">Volume</span>
         <span class="mono-val">{volPct}</span>
       </div>
       <div
@@ -154,7 +154,7 @@
 
     <!-- PITCH BANK -->
     <div class="field">
-      <span class="label">Pitch Quantization Bank</span>
+      <span class="label">scale selector</span>
       <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
       <div class="dd" on:click|stopPropagation>
         <button class="dd-trigger" on:click={toggleScaleMenu}>
@@ -162,7 +162,7 @@
           <span class="chev">▾</span>
         </button>
         {#if scaleMenuOpen}
-          <div class="dd-menu scroll">
+          <div class="dd-menu scroll up">
             {#each scales as s, i}
               <button class="dd-item scale" class:active={i === currentScale} on:click={() => selectScale(i)}>{s}</button>
             {/each}
@@ -176,7 +176,7 @@
     <!-- SENSITIVITY -->
     <div class="field">
       <div class="row">
-        <span class="label">Price Sensitivity</span>
+        <span class="label">sensitivity</span>
         <span class="mono-val sm">{SENS[sensitivityStep]}</span>
       </div>
       <div class="seg">
@@ -368,6 +368,13 @@
   .dd-menu.scroll {
     max-height: 230px;
     overflow-y: auto;
+  }
+  /* Apertura verso l'alto (es. banco scale, vicino al fondo del pannello). */
+  .dd-menu.up {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 6px;
   }
   .dd-item {
     display: flex;

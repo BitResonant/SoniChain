@@ -55,11 +55,13 @@
   let lastPrice = 0;
   let sessionOpen = 0;
   let changePct = 0;
-  let volatilityNorm = 0;
-  let densityNorm = 0;
-  let flowImbalance = 0; // +1 bullish, -1 bearish
-  const VOL_REF = 0.0015; // stddev log-return di riferimento
-  const DENS_REF = 1200; // ms: intervalli più brevi => densità più alta
+  // maker_side grezzo (0/1) inoltrato alla UI; la rampa è in OutputScope.
+  let makerSide = 0.5;
+  // Valori grezzi di density/volatility + contatore tick: la normalizzazione
+  // adattiva (cattura soglie in calibrazione + decadimento) è in OutputScope.
+  let densityRaw = 0;
+  let volatilityRaw = 0;
+  let tickSeq = 0;
 
   // ---- Audio analysis ----
   let analyserMain: AnalyserNode | null = null;
@@ -162,14 +164,11 @@
               setRnboParam('volatility', volatility);
             }
 
-            // Letture di mercato reali → barre/indicatori (EMA).
-            const vTarget = Math.max(0, Math.min(1, volatility / VOL_REF));
-            volatilityNorm += (vTarget - volatilityNorm) * 0.08;
-            const dTarget = Math.max(0, Math.min(1, 1 - density / DENS_REF));
-            densityNorm += (dTarget - densityNorm) * 0.06;
-            // maker_side 0 = compratore taker (bullish), 1 = venditore taker (bearish)
-            const side = maker_side === 0 ? 1 : -1;
-            flowImbalance += (side - flowImbalance) * 0.05;
+            // Inoltra i grezzi alla UI: la normalizzazione adattiva è in OutputScope.
+            volatilityRaw = volatility;
+            densityRaw = density;
+            makerSide = maker_side; // 0 => bullish, 1 => bearish
+            tickSeq++;
 
             lastPrice = price;
             changePct = sessionOpen ? ((price - sessionOpen) / sessionOpen) * 100 : 0;
@@ -225,7 +224,9 @@
       } else {
         r = l;
       }
-      const gain = 2.6;
+      // Guadagno solo-UI: i livelli reali sono minuscoli, qui li amplifichiamo
+      // per riempire i meter (clamp a 1, non tocca il volume d'uscita).
+      const gain = 11;
       meterL = Math.max(Math.min(1, l * gain), meterL - dt * 1.6);
       meterR = Math.max(Math.min(1, r * gain), meterR - dt * 1.6);
       meterRAF = requestAnimationFrame(tick);
@@ -362,6 +363,8 @@
   $: calibActive = calibrationPhase !== 'idle';
   $: calibReady = calibrationPhase === 'pending-calibrate';
   $: calibRunning = calibrationPhase === 'calibrating';
+  // Finestra di cattura soglie (vale sia per la calibrazione iniziale che per il recalibrate).
+  $: calibratingNow = calibrationPhase === 'calibrating';
   $: calibConnecting = calibrationPhase === 'initial-connecting' || calibrationPhase === 'recal-connecting';
   $: calibDeg = ((calibrationProgress / 100) * 360).toFixed(1) + 'deg';
   $: calibrated = calibrationPhase === 'idle' && hasCalibrated;
@@ -376,8 +379,8 @@
     <div class="titlebar">
       <div class="tb-left">
         <div class="tb-brand">
-          <span class="tb-name">SoniFyer</span>
-          <span class="tb-sub">Core · Engine Standalone</span>
+          <span class="tb-name">SoniChain</span>
+          <span class="tb-sub">DSP · Crypto data sonification</span>
         </div>
       </div>
       <div class="theme-switch">
@@ -420,7 +423,17 @@
 
         <CryptoChart dataBuffer={cryptoData} {theme} />
 
-        <OutputScope {theme} {analyserMain} {analyserL} {analyserR} {flowImbalance} {volatilityNorm} {densityNorm} />
+        <OutputScope
+          {theme}
+          {analyserMain}
+          {analyserL}
+          {analyserR}
+          makerTarget={makerSide}
+          {densityRaw}
+          {volatilityRaw}
+          {tickSeq}
+          calibrating={calibratingNow}
+        />
       </div>
 
       <!-- RIGHT -->
@@ -466,8 +479,8 @@
               <div class="cal-stack">
                 <div class="ring"><div class="ring-spin"></div></div>
                 <div class="cal-text">
-                  <span class="cal-title big">Calibrate Engine</span>
-                  <span class="cal-sub">The engine learns this asset's dynamic range before mapping price to sound.</span>
+                  <span class="cal-title big">Calibrate Audio Engine</span>
+                  <span class="cal-sub">The audio engine learns this asset's dynamic range before mapping price to sound.</span>
                 </div>
                 <button class="cal-go" on:click={startCalibration}>Calibrate</button>
                 <span class="cal-hint">≈ 30 seconds</span>

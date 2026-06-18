@@ -7,10 +7,16 @@
   export let analyserMain: AnalyserNode | null = null;
   export let analyserL: AnalyserNode | null = null;
   export let analyserR: AnalyserNode | null = null;
-  // Letture di mercato reali (smussate dal genitore), tutte in 0..1 (flow in -1..1).
-  export let flowImbalance: number = 0; // +1 = pressione d'acquisto (bullish), -1 = vendita
-  export let volatilityNorm: number = 0;
-  export let densityNorm: number = 0;
+  // Valori grezzi di mercato; la normalizzazione adattiva con soglie è qui sotto.
+  // tickSeq cambia a ogni nuovo tick; calibrating = finestra di cattura min/max
+  // (vale sia per la calibrazione iniziale che per il recalibrate).
+  export let volatilityRaw: number = 0;
+  export let densityRaw: number = 0;
+  export let tickSeq: number = 0;
+  export let calibrating: boolean = false;
+  // maker_side grezzo identico alla patch RNBO: 0 = compratore taker, 1 = venditore taker.
+  // 0.5 = neutro (nessun dato ancora).
+  export let makerTarget: number = 0.5;
 
   let scopeCanvas: HTMLCanvasElement;
   let gonioCanvas: HTMLCanvasElement;
@@ -22,6 +28,14 @@
   let animationId: number;
   let resizeObserver: ResizeObserver | null = null;
   let frame = 0;
+  let lastT = 0;
+
+  // Order Flow Imbalance: rampa lineare verso maker_side che raggiunge il
+  // target in 1000ms (stessa logica della patch RNBO). flowRamp ∈ [0,1]:
+  // 0 => bullish, 1 => bearish. Mostra il "tira e molla" fra i due estremi.
+  let flowRamp = 0.5;
+  let flowImbalance = 0; // +1 = bullish, -1 = bearish (derivato dalla rampa)
+  const FLOW_RAMP_MS = 3000;
 
   // Buffer riutilizzati per le letture time-domain.
   let bufMain = new Float32Array(2048);
@@ -30,19 +44,74 @@
 
   let stereoWidth = 0; // 0 = mono, ~1 = ampio
 
+  // Guadagno SOLO per la visualizzazione (non influisce sull'audio): il segnale
+  // reale ha ampiezza minuscola, qui lo amplifichiamo per riempire il range utile.
+  const SCOPE_GAIN = 8;
+  const GONIO_GAIN = 8;
+
+  // ---- Normalizzazione adattiva con soglie (density & volatility) ----
+  // Durante la calibrazione cattura min/max nella finestra temporale. A regime
+  // le soglie decadono linearmente verso 0 in 60s e "scattano" sul nuovo picco
+  // quando il valore le supera. Uscita riscalata in 0..100.
+  const DECAY_MS = 60000;
+  interface NormState {
+    hi: number;
+    lo: number;
+    hiRate: number;
+    loRate: number;
+    min: number;
+    max: number;
+  }
+  const makeNorm = (): NormState => ({ hi: 1, lo: 0, hiRate: 0, loRate: 0, min: Infinity, max: -Infinity });
+  const normVol = makeNorm();
+  const normDens = makeNorm();
+  let prevCalibrating = false;
+  let lastSeq = -1;
+  let volPctVal = 0;
+  let densPctVal = 0;
+
+  function stepNorm(s: NormState, raw: number, newTick: boolean, dtMs: number): number {
+    if (calibrating) {
+      // Cattura: aggiorna gli estremi della finestra e usali come range corrente.
+      if (newTick) {
+        if (raw < s.min) s.min = raw;
+        if (raw > s.max) s.max = raw;
+      }
+      s.lo = s.min === Infinity ? 0 : s.min;
+      s.hi = s.max === -Infinity ? Math.max(raw, 1e-9) : s.max;
+    } else {
+      // Regime: scatto sul nuovo picco + decadimento lineare verso 0 in 60s.
+      if (newTick) {
+        if (raw > s.hi) {
+          s.hi = raw;
+          s.hiRate = raw / DECAY_MS;
+        }
+        if (raw < s.lo) {
+          s.lo = raw;
+          s.loRate = raw / DECAY_MS;
+        }
+      }
+      s.hi = Math.max(0, s.hi - s.hiRate * dtMs);
+      s.lo = Math.max(0, s.lo - s.loRate * dtMs);
+    }
+    const range = s.hi - s.lo;
+    if (range < 1e-9) return 0;
+    return Math.max(0, Math.min(100, ((raw - s.lo) / range) * 100));
+  }
+
   // Etichette/colori derivati per la barra di order flow e i parametri del modello.
   $: flowText = (flowImbalance >= 0 ? '+' : '') + flowImbalance.toFixed(2);
   $: flowColor =
     flowImbalance > 0.1 ? 'var(--up)' : flowImbalance < -0.1 ? 'var(--down)' : 'var(--accent)';
-  // Riempimento dal centro: bullish verso sinistra, bearish verso destra.
+  // Riempimento dal centro: bullish verso destra, bearish verso sinistra.
   $: flowFill =
     flowImbalance >= 0
-      ? `left:${50 - flowImbalance * 50}%; right:50%;`
-      : `left:50%; right:${50 - Math.abs(flowImbalance) * 50}%;`;
+      ? `left:50%; right:${50 - flowImbalance * 50}%;`
+      : `left:${50 - Math.abs(flowImbalance) * 50}%; right:50%;`;
 
   $: modelParams = [
-    { label: 'Volatility', pct: Math.round(volatilityNorm * 100) },
-    { label: 'Density', pct: Math.round(densityNorm * 100) }
+    { label: 'Volatility', pct: Math.round(volPctVal) },
+    { label: 'Density', pct: Math.round(densPctVal) }
   ];
 
   function fit(): void {
@@ -99,7 +168,8 @@
     ctx.beginPath();
     for (let x = 0; x <= w; x += 1) {
       const idx = Math.floor((x / w) * (n - 1));
-      const y = mid - data[idx] * amp;
+      const v = Math.max(-1, Math.min(1, data[idx] * SCOPE_GAIN));
+      const y = mid - v * amp;
       x ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
     }
     ctx.strokeStyle = th.accent;
@@ -162,13 +232,14 @@
 
     // Traccia goniometro: campioni (L,R) ruotati 45° (mono => verticale).
     const step = Math.max(1, Math.floor(n / 160));
+    const k = R * 0.7; // i campioni clampati [-1,1] restano dentro il cerchio
     ctx.beginPath();
     let started = false;
     for (let i = 0; i < n; i += step) {
-      const L = dl[i];
-      const Rr = dr[i];
-      const x = cx + ((Rr - L) / Math.SQRT2) * R * 1.4;
-      const y = cy - ((L + Rr) / Math.SQRT2) * R * 1.4;
+      const L = Math.max(-1, Math.min(1, dl[i] * GONIO_GAIN));
+      const Rr = Math.max(-1, Math.min(1, dr[i] * GONIO_GAIN));
+      const x = cx + ((Rr - L) / Math.SQRT2) * k;
+      const y = cy - ((L + Rr) / Math.SQRT2) * k;
       started ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
       started = true;
     }
@@ -180,7 +251,34 @@
     ctx.globalAlpha = 1;
   }
 
-  function loop(): void {
+  function loop(now: number): void {
+    const dtMs = lastT ? Math.min(80, now - lastT) : 0;
+    lastT = now;
+
+    // Rampa lineare verso il target (0/1) a velocità 1 unità / FLOW_RAMP_MS.
+    const stepMax = dtMs / FLOW_RAMP_MS;
+    const diff = makerTarget - flowRamp;
+    flowRamp += Math.max(-stepMax, Math.min(stepMax, diff));
+    flowImbalance = 1 - 2 * flowRamp; // 0 => +1 bullish, 1 => -1 bearish
+
+    // Normalizzazione adattiva density/volatility.
+    if (calibrating && !prevCalibrating) {
+      // Inizio cattura: azzera gli estremi della finestra.
+      normVol.min = normDens.min = Infinity;
+      normVol.max = normDens.max = -Infinity;
+    } else if (!calibrating && prevCalibrating) {
+      // Fine cattura: avvia il decadimento delle soglie verso 0 in 60s.
+      normVol.hiRate = normVol.hi / DECAY_MS;
+      normVol.loRate = normVol.lo / DECAY_MS;
+      normDens.hiRate = normDens.hi / DECAY_MS;
+      normDens.loRate = normDens.lo / DECAY_MS;
+    }
+    prevCalibrating = calibrating;
+    const newTick = tickSeq !== lastSeq;
+    lastSeq = tickSeq;
+    volPctVal = stepNorm(normVol, volatilityRaw, newTick, dtMs);
+    densPctVal = stepNorm(normDens, densityRaw, newTick, dtMs);
+
     drawScope();
     drawGonio();
     // Aggiorna l'etichetta di larghezza via DOM ref (no re-render) ogni ~8 frame.
@@ -232,7 +330,7 @@
         <div class="flow-fill" style="{flowFill} background:{flowColor}"></div>
       </div>
       <div class="flow-labels">
-        <span>BULLISH</span><span>STAGNANT</span><span>BEARISH</span>
+        <span>BEARISH</span><span>STAGNANT</span><span>BULLISH</span>
       </div>
     </div>
 
