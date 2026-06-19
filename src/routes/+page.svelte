@@ -39,6 +39,11 @@
   let calibrationInterval: number;
   let remainingSeconds = 30;
 
+  // Calibrate button: briefly non-interactive when the prompt first appears,
+  // so it can't be clicked by accident the instant the screen shows up.
+  let calibBtnEnabled = false;
+  let calibBtnTimer: number | undefined;
+
   let audioContext: AudioContext | null = null;
   let rnboDevice: any = null;
   let isRnboReady = false;
@@ -97,7 +102,16 @@
 
   function maybeShowCalibrate(): void {
     if (!isRnboReady || !initialConnectStreamReady || !initialConnectTimerDone) return;
-    if (calibrationPhase === 'initial-connecting') calibrationPhase = 'pending-calibrate';
+    if (calibrationPhase === 'initial-connecting') {
+      calibrationPhase = 'pending-calibrate';
+      // Lock the Calibrate button for 1s after the prompt appears.
+      calibBtnEnabled = false;
+      if (calibBtnTimer !== undefined) clearTimeout(calibBtnTimer);
+      calibBtnTimer = window.setTimeout(() => {
+        calibBtnEnabled = true;
+        calibBtnTimer = undefined;
+      }, 1000);
+    }
   }
 
   onMount(() => {
@@ -221,6 +235,7 @@
       if (calibrationInterval) clearInterval(calibrationInterval);
       if (meterRAF) cancelAnimationFrame(meterRAF);
       if (scaleSwitchTimeout !== undefined) clearTimeout(scaleSwitchTimeout);
+      if (calibBtnTimer !== undefined) clearTimeout(calibBtnTimer);
     };
   });
 
@@ -528,7 +543,7 @@
                   <span class="cal-title big">Calibrate Audio Engine</span>
                   <span class="cal-sub">The audio engine learns this asset's dynamic range before mapping price to sound.</span>
                 </div>
-                <button class="cal-go" on:click={startCalibration}>Calibrate</button>
+                <button class="cal-go" disabled={!calibBtnEnabled} on:click={startCalibration}>Calibrate</button>
                 <span class="cal-hint">≈ 30 seconds</span>
               </div>
             {:else if calibConnecting}
@@ -947,6 +962,11 @@
   }
   .cal-go:hover {
     filter: brightness(1.08);
+  }
+  .cal-go:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+    transition: opacity 0.2s;
   }
   .cal-hint {
     font-family: 'IBM Plex Mono', monospace;
