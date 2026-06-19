@@ -23,7 +23,7 @@
   const ASSETS = [
     { symbol: 'btcusdt', label: 'Bitcoin', sym: 'BTC', quote: 'USDT', dec: 2 },
     { symbol: 'ethusdt', label: 'Ethereum', sym: 'ETH', quote: 'USDT', dec: 2 },
-    { symbol: 'usdtusdc', label: 'Tether', sym: 'USDT', quote: 'USDC', dec: 4 },
+    { symbol: 'solusdt', label: 'Solana', sym: 'SOL', quote: 'USDT', dec: 2 },
     { symbol: 'bnbusdt', label: 'BNB', sym: 'BNB', quote: 'USDT', dec: 2 },
     { symbol: 'usdcusdt', label: 'USD Coin', sym: 'USDC', quote: 'USDT', dec: 4 }
   ];
@@ -64,6 +64,12 @@
 
   // ---- Theme ----
   let themeName: ThemeName = 'graphite';
+  // Ogni skin ha il proprio modello di sintesi (parametro RNBO "instrument").
+  const THEME_INSTRUMENT: Record<ThemeName, number> = { graphite: 1, slate: 2, bone: 3 };
+  function selectTheme(key: ThemeName): void {
+    themeName = key;
+    if (isRnboReady) setRnboParam('resonators/note_changer/instrument', THEME_INSTRUMENT[key]);
+  }
   $: theme = THEMES[themeName];
   $: rootStyle = Object.entries(theme)
     .map(([k, v]) => `--${k}:${v}`)
@@ -145,6 +151,7 @@
         pushVolume();
         setRnboParam('scaling/sensitivity', sensitivityStep);
         setRnboParam('resonators/scales/scale_selector', currentScale);
+        setRnboParam('resonators/note_changer/instrument', THEME_INSTRUMENT[themeName]);
 
         startMeters();
         maybeShowCalibrate();
@@ -419,7 +426,7 @@
         </label>
         <div class="theme-switch" use:help={HELP.theme}>
           {#each THEME_LABELS as t}
-            <button class:active={themeName === t.key} on:click={() => (themeName = t.key)}>{t.label}</button>
+            <button class:active={themeName === t.key} on:click={() => selectTheme(t.key)}>{t.label}</button>
           {/each}
         </div>
       </div>

@@ -20,7 +20,7 @@ export const HELP: Record<string, string> = {
   orderflow: "Shows the balance of power between aggressive buyers and sellers in the market.",
   density: 'Densità degli scambi: Displays how fast trades are hitting the market scaled from 0 to 100.',
   volatility: 'Displays the size of recent price movements scaled from 0 to 100.',
-  theme: "Changes the color palette of the interface."
+  theme: "Selects a new visual theme for the application interface and its internal sound generation matrix"
 };
 
 // Svelte action: mostra la bolla dopo 500ms di hover, solo se le bolle sono attive.
