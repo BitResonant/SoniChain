@@ -9,7 +9,7 @@
   export let currentScale: number;
   export let sensitivityStep: number;
   export let playing: boolean = true;
-  export let meterL: number = 0; // 0..1, livello reale d'uscita
+  export let meterL: number = 0; // 0..1, real output level
   export let meterR: number = 0;
   export let statusText: string = '';
   export let calibrated: boolean = false;
@@ -371,7 +371,7 @@
     max-height: 230px;
     overflow-y: auto;
   }
-  /* Apertura verso l'alto (es. banco scale, vicino al fondo del pannello). */
+  /* Opens upward (e.g. scale bank, near the bottom of the panel). */
   .dd-menu.up {
     top: auto;
     bottom: 100%;

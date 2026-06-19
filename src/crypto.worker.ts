@@ -21,10 +21,10 @@ let activeWs: WebSocket | null = null;
 let pendingStreamReady = false;
 let streamTickCount = 0;
 
-// Gestione dell'handshake e dello stream WebSocket con backoff asincrono
+// Handles the WebSocket handshake and stream with asynchronous backoff
 function connectStream(symbol: string = 'btcusdt') {
   if (activeWs) {
-    activeWs.onclose = null; // impedisce la riconnessione automatica sul vecchio socket
+    activeWs.onclose = null; // prevents automatic reconnection on the old socket
     activeWs.close();
     activeWs = null;
   }
@@ -39,7 +39,7 @@ function connectStream(symbol: string = 'btcusdt') {
   activeWs = ws;
 
   ws.onopen = () => {
-    console.log(`[Worker] Handshake stabilito. Stream per ${symbol.toUpperCase()} connesso.`);
+    console.log(`[Worker] Handshake established. Stream for ${symbol.toUpperCase()} connected.`);
   };
 
   ws.onmessage = (event: MessageEvent) => {
@@ -48,12 +48,12 @@ function connectStream(symbol: string = 'btcusdt') {
   };
 
   ws.onerror = (error) => {
-    console.error("[Worker] Stream Fault di rete:", error);
+    console.error("[Worker] Stream network fault:", error);
   };
 
   ws.onclose = () => {
     if (activeWs === ws) {
-      console.warn("[Worker] Connessione interrotta. Tentativo di riconnessione in corso...");
+      console.warn("[Worker] Connection lost. Attempting to reconnect...");
       setTimeout(() => connectStream(symbol), 3000);
     }
   };
@@ -64,7 +64,7 @@ function processTick(payload: BinanceTick): void {
   const currentPrice = parseFloat(payload.p);
   const volume = parseFloat(payload.q);
   const tradeTime = payload.T;
-  const isBuyerMaker = payload.m ? 1 : 0; // Cast a intero 0/1 per routing DSP o inversione di fase
+  const isBuyerMaker = payload.m ? 1 : 0; // Cast to integer 0/1 for DSP routing or phase inversion
 
   // 2. Inter-Onset Interval (IOI) in millisecondi
   let timeDeltaMs = 0;
@@ -73,12 +73,12 @@ function processTick(payload: BinanceTick): void {
   }
   lastTimestamp = tradeTime;
 
-  // 3. Calcolo della Volatilità tramite Log-Returns (Standard Deviation)
+  // 3. Volatility computation via Log-Returns (Standard Deviation)
   let volatilityRaw = 0.0;
   priceHistory.push(currentPrice);
 
   if (priceHistory.length > WINDOW_SIZE + 1) {
-    priceHistory.shift(); // Mantiene la dimensione fissa del ring buffer
+    priceHistory.shift(); // Keeps the ring buffer at a fixed size
   }
 
   if (priceHistory.length > 1) {
@@ -92,7 +92,7 @@ function processTick(payload: BinanceTick): void {
     volatilityRaw = Math.sqrt(variance);
   }
 
-  // 4. Trasferimento asincrono dei dati grezzi alla UI e al motore DSP
+  // 4. Asynchronous transfer of raw data to the UI and the DSP engine
   streamTickCount++;
   if (pendingStreamReady && streamTickCount >= 2) {
     pendingStreamReady = false;
@@ -109,11 +109,10 @@ function processTick(payload: BinanceTick): void {
       volatility: volatilityRaw
     }
   };
-  console.debug('[Worker] Sending tick:', tickData.data);
   self.postMessage(tickData);
 }
 
-// In ascolto di comandi dal thread principale (es. cambio asset)
+// Listening for commands from the main thread (e.g. asset change)
 self.onmessage = (e: MessageEvent) => {
   if (e.data.type === 'START' || e.data.type === 'SWITCH') {
     pendingStreamReady = true;

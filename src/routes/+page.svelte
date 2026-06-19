@@ -8,7 +8,7 @@
   import { fade } from 'svelte/transition';
   import { help, HELP, helpEnabled, activeHelp } from '../help';
 
-  // Posiziona la bolla d'aiuto vicino all'elemento sorgente (coord. viewport).
+  // Positions the help bubble near the source element (viewport coords).
   function bubbleStyle(rect: DOMRect): string {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -29,7 +29,7 @@
   ];
   const SCALES = ['Major', 'Minor', 'Major pentatonic', 'Minor pentatonic', 'Whole tone', 'Lydian', 'Mixolydian'];
 
-  // Buffer del grafico: prezzi reali.
+  // Chart buffer: real prices.
   let cryptoData: number[] = Array(64).fill(0);
   let priceBufferInitialized = false;
 
@@ -48,7 +48,7 @@
   let initialConnectStreamReady = false;
   let initialConnectTimerDone = false;
 
-  // master_volume RNBO ∈ [0,1], coincide con la posizione del fader.
+  // RNBO master_volume ∈ [0,1], matches the fader position.
   let masterVolume = 0;
   let currentScale = 0;
   let sensitivityStep = 1;
@@ -64,7 +64,7 @@
 
   // ---- Theme ----
   let themeName: ThemeName = 'graphite';
-  // Ogni skin ha il proprio modello di sintesi (parametro RNBO "instrument").
+  // Each skin has its own synthesis model (RNBO "instrument" parameter).
   const THEME_INSTRUMENT: Record<ThemeName, number> = { graphite: 1, slate: 2, bone: 3 };
   function selectTheme(key: ThemeName): void {
     themeName = key;
@@ -75,14 +75,14 @@
     .map(([k, v]) => `--${k}:${v}`)
     .join(';');
 
-  // ---- Market readouts (reali, smussate) ----
+  // ---- Market readouts (real, smoothed) ----
   let lastPrice = 0;
   let sessionOpen = 0;
   let changePct = 0;
-  // maker_side grezzo (0/1) inoltrato alla UI; la rampa è in OutputScope.
+  // Raw maker_side (0/1) forwarded to the UI; the ramp lives in OutputScope.
   let makerSide = 0.5;
-  // Valori grezzi di density/volatility + contatore tick: la normalizzazione
-  // adattiva (cattura soglie in calibrazione + decadimento) è in OutputScope.
+  // Raw density/volatility values + tick counter: the adaptive
+  // normalization (threshold capture during calibration + decay) lives in OutputScope.
   let densityRaw = 0;
   let volatilityRaw = 0;
   let tickSeq = 0;
@@ -118,13 +118,13 @@
         rnboDevice = await RNBO.createDevice({ context: audioContext, patcher });
         console.log('[RNBO] Available parameters:', Array.from(rnboDevice.parametersById.keys()));
 
-        // Bus d'uscita con analizzatori reali (oscilloscopio, meter, goniometro).
+        // Output bus with real analysers (oscilloscope, meter, goniometer).
         analyserMain = audioContext.createAnalyser();
         analyserMain.fftSize = 2048;
         rnboDevice.node.connect(analyserMain);
         analyserMain.connect(audioContext.destination);
 
-        // Tap stereo per il goniometro; mantenuti "vivi" da un sink a guadagno 0.
+        // Stereo taps for the goniometer; kept "alive" by a zero-gain sink.
         try {
           const splitter = audioContext.createChannelSplitter(2);
           analyserL = audioContext.createAnalyser();
@@ -189,7 +189,7 @@
               setRnboParam('volatility', volatility);
             }
 
-            // Inoltra i grezzi alla UI: la normalizzazione adattiva è in OutputScope.
+            // Forward the raw values to the UI: adaptive normalization is in OutputScope.
             volatilityRaw = volatility;
             densityRaw = density;
             makerSide = maker_side; // 0 => bullish, 1 => bearish
@@ -250,8 +250,8 @@
       } else {
         r = l;
       }
-      // Guadagno solo-UI: i livelli reali sono minuscoli, qui li amplifichiamo
-      // per riempire i meter (clamp a 1, non tocca il volume d'uscita).
+      // UI-only gain: the real levels are tiny, here we amplify them
+      // to fill the meters (clamped to 1, does not affect the output volume).
       const gain = 11;
       meterL = Math.max(Math.min(1, l * gain), meterL - dt * 1.6);
       meterR = Math.max(Math.min(1, r * gain), meterR - dt * 1.6);
@@ -271,7 +271,7 @@
     }
   }
 
-  // Applica il volume rispettando il gate play/pause.
+  // Applies the volume, respecting the play/pause gate.
   function pushVolume(): void {
     setRnboParam('master_volume', playing ? masterVolume : 0);
   }
@@ -398,7 +398,7 @@
   $: calibActive = calibrationPhase !== 'idle';
   $: calibReady = calibrationPhase === 'pending-calibrate';
   $: calibRunning = calibrationPhase === 'calibrating';
-  // Finestra di cattura soglie (vale sia per la calibrazione iniziale che per il recalibrate).
+  // Threshold capture window (applies to both the initial calibration and the recalibrate).
   $: calibratingNow = calibrationPhase === 'calibrating';
   $: calibConnecting = calibrationPhase === 'initial-connecting' || calibrationPhase === 'recal-connecting';
   $: calibDeg = ((calibrationProgress / 100) * 360).toFixed(1) + 'deg';

@@ -1,12 +1,12 @@
 import { writable, get } from 'svelte/store';
 
-// Interruttore globale dei "help bubbles" (attivo di default all'avvio).
+// Global toggle for the "help bubbles" (enabled by default at startup).
 export const helpEnabled = writable(true);
 
-// Bolla attualmente visibile: testo + rettangolo (viewport) dell'elemento sorgente.
+// Currently visible bubble: text + (viewport) rectangle of the source element.
 export const activeHelp = writable<{ text: string; rect: DOMRect } | null>(null);
 
-// Testi di aiuto — SEGNAPOSTO: sostituiscili con le spiegazioni reali.
+// Help texts — PLACEHOLDER: replace them with the real explanations.
 export const HELP: Record<string, string> = {
   live: "Toggles the audio engine state.",
   asset: 'Selects the cryptocurrency asset for sonification.',
@@ -18,12 +18,12 @@ export const HELP: Record<string, string> = {
   waveform: "Displays the visual shape of the sound waves being generated right now.",
   vector: "Displays the balance and phase relationship between the left and right audio channels.",
   orderflow: "Shows the balance of power between aggressive buyers and sellers in the market.",
-  density: 'Densità degli scambi: Displays how fast trades are hitting the market scaled from 0 to 100.',
+  density: 'Trade density: displays how fast trades are hitting the market, scaled from 0 to 100.',
   volatility: 'Displays the size of recent price movements scaled from 0 to 100.',
   theme: "Selects a new visual theme for the application interface and its internal sound generation matrix"
 };
 
-// Svelte action: mostra la bolla dopo 500ms di hover, solo se le bolle sono attive.
+// Svelte action: shows the bubble after 500ms of hover, only if the bubbles are enabled.
 export function help(node: HTMLElement, text: string) {
   let current = text;
   let timer: ReturnType<typeof setTimeout> | undefined;

@@ -4,19 +4,19 @@
   import { help, HELP } from '../help';
 
   export let theme: Theme;
-  // Nodi di analisi reali sul bus d'uscita audio.
+  // Real analysis nodes on the audio output bus.
   export let analyserMain: AnalyserNode | null = null;
   export let analyserL: AnalyserNode | null = null;
   export let analyserR: AnalyserNode | null = null;
-  // Valori grezzi di mercato; la normalizzazione adattiva con soglie è qui sotto.
-  // tickSeq cambia a ogni nuovo tick; calibrating = finestra di cattura min/max
-  // (vale sia per la calibrazione iniziale che per il recalibrate).
+  // Raw market values; the adaptive normalization with thresholds is below.
+  // tickSeq changes on each new tick; calibrating = min/max capture window
+  // (applies to both the initial calibration and the recalibrate).
   export let volatilityRaw: number = 0;
   export let densityRaw: number = 0;
   export let tickSeq: number = 0;
   export let calibrating: boolean = false;
-  // maker_side grezzo identico alla patch RNBO: 0 = compratore taker, 1 = venditore taker.
-  // 0.5 = neutro (nessun dato ancora).
+  // Raw maker_side, identical to the RNBO patch: 0 = taker buyer, 1 = taker seller.
+  // 0.5 = neutral (no data yet).
   export let makerTarget: number = 0.5;
 
   let scopeCanvas: HTMLCanvasElement;
@@ -31,29 +31,29 @@
   let frame = 0;
   let lastT = 0;
 
-  // Order Flow Imbalance: rampa lineare verso maker_side che raggiunge il
-  // target in 1000ms (stessa logica della patch RNBO). flowRamp ∈ [0,1]:
-  // 0 => bullish, 1 => bearish. Mostra il "tira e molla" fra i due estremi.
+  // Order Flow Imbalance: linear ramp toward maker_side that reaches the
+  // target in 1000ms (same logic as the RNBO patch). flowRamp ∈ [0,1]:
+  // 0 => bullish, 1 => bearish. Shows the "tug of war" between the two extremes.
   let flowRamp = 0.5;
-  let flowImbalance = 0; // +1 = bullish, -1 = bearish (derivato dalla rampa)
+  let flowImbalance = 0; // +1 = bullish, -1 = bearish (derived from the ramp)
   const FLOW_RAMP_MS = 3000;
 
-  // Buffer riutilizzati per le letture time-domain.
+  // Reused buffers for the time-domain reads.
   let bufMain = new Float32Array(2048);
   let bufL = new Float32Array(2048);
   let bufR = new Float32Array(2048);
 
-  let stereoWidth = 0; // 0 = mono, ~1 = ampio
+  let stereoWidth = 0; // 0 = mono, ~1 = wide
 
-  // Guadagno SOLO per la visualizzazione (non influisce sull'audio): il segnale
-  // reale ha ampiezza minuscola, qui lo amplifichiamo per riempire il range utile.
+  // Gain for the visualization ONLY (does not affect the audio): the real
+  // signal has a tiny amplitude, here we amplify it to fill the usable range.
   const SCOPE_GAIN = 8;
   const GONIO_GAIN = 8;
 
-  // ---- Normalizzazione adattiva con soglie (density & volatility) ----
-  // Durante la calibrazione cattura min/max nella finestra temporale. A regime
-  // le soglie decadono linearmente verso 0 in 60s e "scattano" sul nuovo picco
-  // quando il valore le supera. Uscita riscalata in 0..100.
+  // ---- Adaptive normalization with thresholds (density & volatility) ----
+  // During calibration it captures min/max within the time window. At steady
+  // state the thresholds decay linearly toward 0 over 60s and "snap" to the new peak
+  // when the value exceeds them. Output rescaled to 0..100.
   const DECAY_MS = 60000;
   interface NormState {
     hi: number;
@@ -73,7 +73,7 @@
 
   function stepNorm(s: NormState, raw: number, newTick: boolean, dtMs: number): number {
     if (calibrating) {
-      // Cattura: aggiorna gli estremi della finestra e usali come range corrente.
+      // Capture: update the window extremes and use them as the current range.
       if (newTick) {
         if (raw < s.min) s.min = raw;
         if (raw > s.max) s.max = raw;
@@ -81,7 +81,7 @@
       s.lo = s.min === Infinity ? 0 : s.min;
       s.hi = s.max === -Infinity ? Math.max(raw, 1e-9) : s.max;
     } else {
-      // Regime: scatto sul nuovo picco + decadimento lineare verso 0 in 60s.
+      // Steady state: snap to the new peak + linear decay toward 0 over 60s.
       if (newTick) {
         if (raw > s.hi) {
           s.hi = raw;
@@ -100,11 +100,11 @@
     return Math.max(0, Math.min(100, ((raw - s.lo) / range) * 100));
   }
 
-  // Etichette/colori derivati per la barra di order flow e i parametri del modello.
+  // Derived labels/colors for the order flow bar and the model parameters.
   $: flowText = (flowImbalance >= 0 ? '+' : '') + flowImbalance.toFixed(2);
   $: flowColor =
     flowImbalance > 0.1 ? 'var(--up)' : flowImbalance < -0.1 ? 'var(--down)' : 'var(--accent)';
-  // Riempimento dal centro: bullish verso destra, bearish verso sinistra.
+  // Fill from the center: bullish toward the right, bearish toward the left.
   $: flowFill =
     flowImbalance >= 0
       ? `left:50%; right:${50 - flowImbalance * 50}%;`
@@ -189,7 +189,7 @@
     const cy = h / 2;
     const R = Math.min(w, h) / 2 - 4;
 
-    // Graticola: cerchi + diagonali L/R.
+    // Graticule: circles + L/R diagonals.
     ctx.strokeStyle = th.lineSoft;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -218,7 +218,7 @@
     if (analyserR) bufR = dr ?? bufR;
     if (!dl || !dr) return;
 
-    // Larghezza stereo da energia side/mid.
+    // Stereo width from side/mid energy.
     let midE = 0;
     let sideE = 0;
     const n = Math.min(dl.length, dr.length);
@@ -231,9 +231,9 @@
     const wTarget = Math.sqrt(sideE) / (Math.sqrt(midE) + Math.sqrt(sideE) + 1e-6);
     stereoWidth += (wTarget - stereoWidth) * 0.1;
 
-    // Traccia goniometro: campioni (L,R) ruotati 45° (mono => verticale).
+    // Goniometer trace: (L,R) samples rotated 45° (mono => vertical).
     const step = Math.max(1, Math.floor(n / 160));
-    const k = R * 0.7; // i campioni clampati [-1,1] restano dentro il cerchio
+    const k = R * 0.7; // samples clamped to [-1,1] stay inside the circle
     ctx.beginPath();
     let started = false;
     for (let i = 0; i < n; i += step) {
@@ -256,19 +256,19 @@
     const dtMs = lastT ? Math.min(80, now - lastT) : 0;
     lastT = now;
 
-    // Rampa lineare verso il target (0/1) a velocità 1 unità / FLOW_RAMP_MS.
+    // Linear ramp toward the target (0/1) at a speed of 1 unit / FLOW_RAMP_MS.
     const stepMax = dtMs / FLOW_RAMP_MS;
     const diff = makerTarget - flowRamp;
     flowRamp += Math.max(-stepMax, Math.min(stepMax, diff));
     flowImbalance = 1 - 2 * flowRamp; // 0 => +1 bullish, 1 => -1 bearish
 
-    // Normalizzazione adattiva density/volatility.
+    // Adaptive density/volatility normalization.
     if (calibrating && !prevCalibrating) {
-      // Inizio cattura: azzera gli estremi della finestra.
+      // Capture start: reset the window extremes.
       normVol.min = normDens.min = Infinity;
       normVol.max = normDens.max = -Infinity;
     } else if (!calibrating && prevCalibrating) {
-      // Fine cattura: avvia il decadimento delle soglie verso 0 in 60s.
+      // Capture end: start the decay of the thresholds toward 0 over 60s.
       normVol.hiRate = normVol.hi / DECAY_MS;
       normVol.loRate = normVol.lo / DECAY_MS;
       normDens.hiRate = normDens.hi / DECAY_MS;
@@ -282,7 +282,7 @@
 
     drawScope();
     drawGonio();
-    // Aggiorna l'etichetta di larghezza via DOM ref (no re-render) ogni ~8 frame.
+    // Update the width label via DOM ref (no re-render) every ~8 frames.
     if (widthLabelEl && frame % 8 === 0) {
       widthLabelEl.textContent = Math.round(stereoWidth * 100) + '% W';
     }

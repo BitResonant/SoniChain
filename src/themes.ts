@@ -1,5 +1,5 @@
-// Palette condivisa fra la pagina (variabili CSS) e i canvas (valori hex reali).
-// Tre temi importati dal design SoniChain: graphite (default, caldo), slate (freddo), bone (chiaro).
+// Palette shared between the page (CSS variables) and the canvases (real hex values).
+// Three themes imported from the SoniChain design: graphite (default, warm), slate (cool), bone (light).
 
 export interface Theme {
   desk: string;
@@ -49,7 +49,7 @@ export const THEME_LABELS: { key: ThemeName; label: string }[] = [
   { key: 'bone', label: 'Bone' }
 ];
 
-// Applica un tema impostando le variabili CSS sull'elemento radice.
+// Applies a theme by setting the CSS variables on the root element.
 export function applyThemeVars(el: HTMLElement, theme: Theme): void {
   (Object.keys(theme) as (keyof Theme)[]).forEach((k) => {
     el.style.setProperty(`--${k}`, theme[k]);

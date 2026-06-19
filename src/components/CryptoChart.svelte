@@ -14,8 +14,8 @@
   let logicalWidth = 0;
   let logicalHeight = 0;
 
-  // Buffer realmente disegnato: insegue dataBuffer con smoothing esponenziale,
-  // smorzando lo "scatto" dei tick discreti del websocket.
+  // Buffer actually drawn: chases dataBuffer with exponential smoothing,
+  // damping the "jump" of the discrete websocket ticks.
   let renderBuffer: number[] = [];
   let lastFrameTime = 0;
   const SMOOTH_TAU = 0.12;
@@ -31,7 +31,7 @@
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  // Catmull-Rom -> Bézier: curva morbida passante per i punti.
+  // Catmull-Rom -> Bézier: smooth curve passing through the points.
   function tracePath(points: { x: number; y: number }[]): void {
     if (!ctx || points.length === 0) return;
     ctx.moveTo(points[0].x, points[0].y);
@@ -79,7 +79,7 @@
       return;
     }
 
-    // Range dinamico con margine.
+    // Dynamic range with margin.
     let min = Infinity;
     let max = -Infinity;
     for (const v of renderBuffer) {
@@ -99,7 +99,7 @@
     const X = (i: number) => (i / (renderBuffer.length - 1)) * W;
     const Y = (v: number) => H - ((v - min) / span) * (H - 16) - 8;
 
-    // Griglia orizzontale.
+    // Horizontal grid.
     ctx.strokeStyle = th.grid;
     ctx.lineWidth = 1;
     for (let i = 1; i < 4; i++) {
@@ -113,7 +113,7 @@
     const points = renderBuffer.map((v, i) => ({ x: X(i), y: Y(v) }));
     const last = points[points.length - 1];
 
-    // Area sotto la curva.
+    // Area under the curve.
     ctx.beginPath();
     ctx.moveTo(0, H);
     ctx.lineTo(points[0].x, points[0].y);
@@ -126,7 +126,7 @@
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // Linea principale.
+    // Main line.
     ctx.beginPath();
     tracePath(points);
     ctx.strokeStyle = th.accent;
@@ -135,7 +135,7 @@
     ctx.lineCap = 'round';
     ctx.stroke();
 
-    // Guida orizzontale tratteggiata al valore corrente + punto di testa.
+    // Dashed horizontal guide at the current value + head dot.
     ctx.setLineDash([3, 4]);
     ctx.strokeStyle = th.line;
     ctx.lineWidth = 1;
