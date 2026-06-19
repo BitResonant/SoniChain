@@ -8,19 +8,19 @@ export const activeHelp = writable<{ text: string; rect: DOMRect } | null>(null)
 
 // Testi di aiuto — SEGNAPOSTO: sostituiscili con le spiegazioni reali.
 export const HELP: Record<string, string> = {
-  live: "Avvia o mette in pausa il motore audio: in pausa l'uscita viene azzerata ma lo stream di mercato continua. (testo segnaposto)",
-  asset: 'Coppia di mercato da sonificare; al cambio parte una nuova calibrazione. (testo segnaposto)',
-  volume: "Livello d'uscita generale del motore audio. (testo segnaposto)",
-  scale: 'Banco di quantizzazione: vincola le note generate alla scala musicale scelta. (testo segnaposto)',
-  sensitivity: 'Quanto marcatamente le variazioni di prezzo modulano i parametri sonori. (testo segnaposto)',
-  recalibrate: 'Riconnette lo stream e ri-misura il range dinamico del mercato corrente. (testo segnaposto)',
-  chart: "Andamento del prezzo sull'ultima finestra di 64 tick. (testo segnaposto)",
-  waveform: "Forma d'onda dell'uscita audio in tempo reale. (testo segnaposto)",
-  vector: "Vettorscopio: correlazione di fase e ampiezza stereo dell'uscita. (testo segnaposto)",
-  orderflow: "Squilibrio del flusso ordini: tendenza fra pressione d'acquisto (bullish) e di vendita (bearish). (testo segnaposto)",
-  density: 'Densità degli scambi: frequenza di arrivo dei trade, normalizzata sul range calibrato. (testo segnaposto)',
-  volatility: 'Volatilità: ampiezza delle oscillazioni di prezzo, normalizzata sul range calibrato. (testo segnaposto)',
-  theme: "Cambia la palette di colori dell'interfaccia. (testo segnaposto)"
+  live: "Toggles the audio engine state.",
+  asset: 'Selects the cryptocurrency asset for sonification.',
+  volume: "Adjusts the master volume level.",
+  scale: 'Selects the musical scale for price-to-pitch mapping.',
+  sensitivity: 'Adjusts how much the sound volume reacts to trading activity on the market. Low: Small trades are ignored; sound is triggered only by large buying or selling spikes. Mid: Standard market activity creates a natural sound response. High: Even the smallest trades will instantly change the sound volume.',
+  recalibrate: 'Reconnects the stream and recalibrates the market dynamic range.',
+  chart: "Displays the recent history of price movements and musical notes over the last 64 market updates.",
+  waveform: "Displays the visual shape of the sound waves being generated right now.",
+  vector: "Displays the balance and phase relationship between the left and right audio channels.",
+  orderflow: "Shows the balance of power between aggressive buyers and sellers in the market.",
+  density: 'Densità degli scambi: Displays how fast trades are hitting the market scaled from 0 to 100.',
+  volatility: 'Displays the size of recent price movements scaled from 0 to 100.',
+  theme: "Changes the color palette of the interface."
 };
 
 // Svelte action: mostra la bolla dopo 500ms di hover, solo se le bolle sono attive.
