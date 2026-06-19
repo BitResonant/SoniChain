@@ -132,7 +132,7 @@
     }
   }
 
-  function readTimeDomain(a: AnalyserNode | null, buf: Float32Array): Float32Array | null {
+  function readTimeDomain(a: AnalyserNode | null, buf: Float32Array<ArrayBuffer>): Float32Array<ArrayBuffer> | null {
     if (!a) return null;
     if (buf.length !== a.fftSize) buf = new Float32Array(a.fftSize);
     a.getFloatTimeDomainData(buf);
