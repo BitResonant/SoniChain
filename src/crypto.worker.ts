@@ -43,7 +43,13 @@ function connectStream(symbol: string = 'btcusdt') {
   };
 
   ws.onmessage = (event: MessageEvent) => {
-    const payload: BinanceTick = JSON.parse(event.data);
+    let payload: BinanceTick;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (err) {
+      console.warn("[Worker] Dropping malformed frame:", err);
+      return;
+    }
     processTick(payload);
   };
 
@@ -64,6 +70,11 @@ function processTick(payload: BinanceTick): void {
   const currentPrice = parseFloat(payload.p);
   const volume = parseFloat(payload.q);
   const tradeTime = payload.T;
+
+  // Drop non-trade / partial frames: a NaN price would propagate into the RNBO
+  // 'price' param and glitch the audio. Coerce volume defensively as well.
+  if (!Number.isFinite(currentPrice)) return;
+  const safeVolume = Number.isFinite(volume) ? volume : 0;
   const isBuyerMaker = payload.m ? 1 : 0; // Cast to integer 0/1 for DSP routing or phase inversion
 
   // 2. Inter-Onset Interval (IOI) in millisecondi
@@ -103,7 +114,7 @@ function processTick(payload: BinanceTick): void {
     type: 'TICK' as const,
     data: {
       price: currentPrice,
-      market_volume: volume,
+      market_volume: safeVolume,
       density: timeDeltaMs,
       maker_side: isBuyerMaker,
       volatility: volatilityRaw

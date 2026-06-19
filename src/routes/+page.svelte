@@ -168,12 +168,14 @@
         cryptoWorker.onmessage = (event: MessageEvent) => {
           if (event.data.type === 'STREAM_READY') {
             streamIsReady = true;
-            if (!hasCalibrated) {
-              initialConnectStreamReady = true;
-              if (isRnboReady) maybeShowCalibrate();
-            } else if (calibrationPhase === 'recal-connecting') {
+            // Transition driven by phase, not hasCalibrated, so the recal-connecting →
+            // calibrating handoff stays robust regardless of calibration history.
+            if (calibrationPhase === 'recal-connecting') {
               calibrationPhase = 'calibrating';
               triggerRnboRecalibration();
+            } else if (!hasCalibrated) {
+              initialConnectStreamReady = true;
+              if (isRnboReady) maybeShowCalibrate();
             }
             return;
           }
@@ -328,7 +330,9 @@
   }
 
   function triggerCalibration(): void {
-    if (!isRnboReady) return;
+    // Recalibration only makes sense after the first calibration has run; guarding
+    // here prevents the stream handler from getting stuck in recal-connecting.
+    if (!isRnboReady || !hasCalibrated) return;
     masterVolume = 0;
     pushVolume();
     streamIsReady = false;
