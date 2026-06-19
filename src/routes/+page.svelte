@@ -55,6 +55,11 @@
   let currentCrypto = 'btcusdt';
   let playing = true;
 
+  // Scale-switching gate: blocks TICK → RNBO for 100 ms after a scale change
+  // to prevent bichords caused by price events arriving mid-transition.
+  let scaleSwitching = false;
+  let scaleSwitchTimeout: number | undefined;
+
   let cryptoWorker: Worker | null = null;
 
   // ---- Theme ----
@@ -169,7 +174,7 @@
           if (event.data.type === 'TICK') {
             const { price, market_volume, density, maker_side, volatility } = event.data.data;
 
-            if (isRnboReady && rnboDevice && streamIsReady) {
+            if (isRnboReady && rnboDevice && streamIsReady && !scaleSwitching) {
               setRnboParam('price', price);
               setRnboParam('market_volume', market_volume);
               setRnboParam('density', density);
@@ -206,6 +211,7 @@
     return () => {
       if (calibrationInterval) clearInterval(calibrationInterval);
       if (meterRAF) cancelAnimationFrame(meterRAF);
+      if (scaleSwitchTimeout !== undefined) clearTimeout(scaleSwitchTimeout);
     };
   });
 
@@ -336,8 +342,17 @@
   }
 
   function handleScale(index: number) {
+    if (index === currentScale) return;
     currentScale = index;
-    if (isRnboReady) setRnboParam('resonators/scales/scale_selector', Number(index));
+    if (!isRnboReady) return;
+
+    scaleSwitching = true;
+    if (scaleSwitchTimeout !== undefined) clearTimeout(scaleSwitchTimeout);
+    setRnboParam('resonators/scales/scale_selector', index);
+    scaleSwitchTimeout = window.setTimeout(() => {
+      scaleSwitching = false;
+      scaleSwitchTimeout = undefined;
+    }, 100);
   }
 
   function handleSensitivity(step: number) {
