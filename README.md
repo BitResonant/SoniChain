@@ -1,5 +1,3 @@
-<div align="center">
-
 # SoniChain
 
 **Real-time sonification of Binance market microstructure through an RNBO DSP engine.**
@@ -12,8 +10,6 @@ SoniChain translates a live crypto order flow into a continuous, low-fatigue aco
 ![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
 ![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)
-
-</div>
 
 ---
 
@@ -123,7 +119,7 @@ flowchart TD
 Each market metric modulates a specific DSP target. The mapping is the core of the design: it is where market semantics become perceptual attributes.
 
 | Market metric | DSP target | Perceptual intent |
-|---|---|---|
+| --- | --- | --- |
 | `maker_side` (Order Flow Imbalance) | Stereo pan — **Bearish → L**, **Bullish → R** | Spatial, pre-attentive map of market lean; keeps the stereo center uncluttered |
 | `price` (discrete Δ via `note_changer`) | Pitch / interval — **Δ > 0 → ascending**, interval width ∝ \|Δ\| | Direction *and* magnitude of price movement, communicated as a musical step |
 | `market_volume` | Noise excitation amplitude (log curve; Low / Mid / High) | Event intensity; user-selectable immersion depth |
@@ -216,7 +212,7 @@ In short, the sound design moves past literal data playback toward **sensory erg
 ## Tech Stack
 
 | Layer | Technology |
-|---|---|
+| --- | --- |
 | Frontend / orchestration | **SvelteKit 2**, **Svelte 5** (`+page.svelte` as orchestrator) |
 | Audio engine | **RNBO** Web export via **`@rnbo/js` 1.3.4**, loaded from `static/DSP.export.json` |
 | Data layer | TypeScript **Web Worker** (`crypto.worker.ts`) — Binance **WebSocket** + metric computation |
@@ -229,7 +225,7 @@ In short, the sound design moves past literal data playback toward **sensory erg
 
 ## Project Structure
 
-```
+```text
 SoniChain/
 ├── src/
 │   ├── routes/
@@ -359,6 +355,4 @@ This project is distributed under the terms of the [`LICENSE`](./LICENSE) file i
 
 ---
 
-<div align="center">
-<sub>SoniChain — BitResonant</sub>
-</div>
+SoniChain — BitResonant
