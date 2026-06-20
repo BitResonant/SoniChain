@@ -4,7 +4,7 @@
 
 SoniChain translates a live crypto order flow into a continuous, low-fatigue acoustic field. Five market metrics drive three noise-excited synthesis engines (subtractive, FM, physical-model waveguide) and a Schroeder–Moorer diffusion network, so that market state can be monitored *peripherally* — as a "sixth sense" — rather than read off a chart.
 
-Watch the live demo on YouTube
+Watch the live demo on YouTube: https://youtu.be/KYNdKtD0t8s
 
 ![SvelteKit](https://img.shields.io/badge/SvelteKit-2-FF3E00?logo=svelte&logoColor=white)
 ![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)
