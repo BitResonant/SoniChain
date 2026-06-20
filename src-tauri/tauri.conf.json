@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "SoniChain",
-  "version": "0.1.0",
-  "identifier": "com.matteo_caruso_linardon.sonifyer",
+  "version": "1.0.0",
+  "identifier": "com.matteocarusolinardon.sonichain",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -23,13 +23,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["dmg", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "Matteo Caruso Linardon",
+    "copyright": "Copyright © 2026 Matteo Caruso Linardon",
+    "shortDescription": "Real-time crypto market sonification",
+    "longDescription": "SoniChain turns live cryptocurrency market data into generative sound, streaming trades from Binance and synthesizing music whose pitch, rhythm, and timbre track the market in real time."
   }
 }
