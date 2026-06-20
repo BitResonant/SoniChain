@@ -1,10 +1,10 @@
 <div align="center">
 
-# SoniFyer
+# SoniChain
 
 **Real-time sonification of Binance market microstructure through an RNBO DSP engine.**
 
-SoniFyer translates a live crypto order flow into a continuous, low-fatigue acoustic field. Five market metrics drive three noise-excited synthesis engines (subtractive, FM, physical-model waveguide) and a Schroeder–Moorer diffusion network, so that market state can be monitored *peripherally* — as a "sixth sense" — rather than read off a chart.
+SoniChain translates a live crypto order flow into a continuous, low-fatigue acoustic field. Five market metrics drive three noise-excited synthesis engines (subtractive, FM, physical-model waveguide) and a Schroeder–Moorer diffusion network, so that market state can be monitored *peripherally* — as a "sixth sense" — rather than read off a chart.
 
 ![SvelteKit](https://img.shields.io/badge/SvelteKit-2-FF3E00?logo=svelte&logoColor=white)
 ![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)
@@ -46,7 +46,7 @@ SoniFyer translates a live crypto order flow into a continuous, low-fatigue acou
 
 ## Overview
 
-SoniFyer is a desktop-and-web application that converts a live Binance data stream into a real-time auditory display. The design objective is not merely to *encode* data as sound, but to do so under an explicit **ergonomic constraint**: the listener must be able to keep the stream running in the background of attention for prolonged sessions without listening fatigue. Every mapping is therefore chosen against a psychoacoustic rationale (spatial imbalance cues, interval-based pitch motion instead of glissando, perceptually motivated timbral modulation) rather than against a naive linear data-to-frequency rule.
+SoniChain is a desktop-and-web application that converts a live Binance data stream into a real-time auditory display. The design objective is not merely to *encode* data as sound, but to do so under an explicit **ergonomic constraint**: the listener must be able to keep the stream running in the background of attention for prolonged sessions without listening fatigue. Every mapping is therefore chosen against a psychoacoustic rationale (spatial imbalance cues, interval-based pitch motion instead of glissando, perceptually motivated timbral modulation) rather than against a naive linear data-to-frequency rule.
 
 The audio engine is authored in **RNBO** (Cycling '74) and exported to a WebAssembly/JS runtime; the host application is a **SvelteKit 2 / Svelte 5** frontend that runs both as a web app and, via **Tauri 2**, as a native desktop shell. Market metrics are computed off the main thread in a TypeScript **Web Worker** and pushed to the DSP device through a strictly unidirectional control path.
 
@@ -230,7 +230,7 @@ In short, the sound design moves past literal data playback toward **sensory erg
 ## Project Structure
 
 ```
-SoniFyer/
+SoniChain/
 ├── src/
 │   ├── routes/
 │   │   ├── +page.svelte          # Orchestrator: hosts the RNBO device, wires worker → setRnboParam
@@ -274,8 +274,8 @@ SoniFyer/
 ### Installation
 
 ```bash
-git clone https://github.com/BitResonant/SoniFyer.git
-cd SoniFyer
+git clone https://github.com/BitResonant/SoniChain.git
+cd SoniChain
 npm install
 ```
 
@@ -360,5 +360,5 @@ This project is distributed under the terms of the [`LICENSE`](./LICENSE) file i
 ---
 
 <div align="center">
-<sub>SoniFyer — BitResonant</sub>
+<sub>SoniChain — BitResonant</sub>
 </div>
