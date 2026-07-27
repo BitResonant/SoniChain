@@ -2,9 +2,12 @@
 
 **Real-time sonification of Binance market microstructure through an RNBO DSP engine.**
 
-SoniChain translates a live crypto order flow into a continuous, low-fatigue acoustic field. Five market metrics drive three noise-excited synthesis engines (subtractive, FM, physical-model waveguide) and a Schroeder–Moorer diffusion network, so that market state can be monitored *peripherally* — as a "sixth sense" — rather than read off a chart.
+SoniChain turns a live crypto order flow into a continuous acoustic field, so that market state can be
+monitored *peripherally* — kept in the background of attention — instead of being read off a chart.
+Five microstructure metrics drive three noise-excited synthesis engines (subtractive, FM, physical-model
+waveguide) and a Schroeder–Moorer diffusion network.
 
-Watch the live demo on YouTube: https://youtu.be/KYNdKtD0t8s
+**[▶ Watch the live demo on YouTube](https://youtu.be/KYNdKtD0t8s)**
 
 ![SvelteKit](https://img.shields.io/badge/SvelteKit-2-FF3E00?logo=svelte&logoColor=white)
 ![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)
@@ -15,26 +18,52 @@ Watch the live demo on YouTube: https://youtu.be/KYNdKtD0t8s
 
 ---
 
+## At a glance
+
+**Role** — sole author: DSP design in Max/RNBO, frontend architecture, market-metric layer, UX. This is the
+second version; the [first one was abandoned](#the-version-i-threw-away) for several months and restarted
+from scratch.
+
+**Problem** — a price chart demands the eyes. A trader watching one screen is not watching the other
+five. Sound is the only channel that can stay open while attention is elsewhere — but the naive mapping
+(price → continuous pitch) produces a siren, and a siren is unlistenable after ten minutes. The design
+problem is not *encoding* data as sound; it is encoding it in a form that survives hours of exposure.
+
+**Decisions, and what each one cost** — pitch is quantized to scale intervals (loses resolution on small
+moves); order-flow imbalance is hard-panned L/R (dies on mono playback); the display re-ranges itself
+adaptively (loses absolute comparability across time); all three engines are excited by the same external
+noise source (no engine can produce a hard attack transient).
+
+**Evidence** — informal: ~4 hours of my own background use across several working days, plus a ~20-minute
+session with 5 listeners (both versions of the project). No controlled test, n = 5, friends. Two concrete
+features in the shipped build exist because of what those sessions surfaced. Where a number appears in this
+README it is a constant from the source, never a benchmark: no CPU or latency figure is claimed.
+
+**Limits** — see [Limits and known gaps](#limits-and-known-gaps). The honest version is at the bottom of
+this file, not omitted from it.
+
+---
+
 ## Table of Contents
 
-- [Overview](#overview)
-- [Features](#features)
+- [The problem](#the-problem)
+- [The version I threw away](#the-version-i-threw-away)
+- [Design decisions and what they cost](#design-decisions-and-what-they-cost)
+- [What listening actually showed](#what-listening-actually-showed)
+- [Two bugs worth reporting](#two-bugs-worth-reporting)
 - [Architecture & Data Flow](#architecture--data-flow)
   - [Parameter Mapping](#parameter-mapping)
+  - [Calibration state machine](#calibration-state-machine)
 - [The RNBO Patch (DSP)](#the-rnbo-patch-dsp)
   - [Control & Routing Layer](#control--routing-layer)
   - [Engine A — Glassarmonica (Subtractive Resonator)](#engine-a--glassarmonica-subtractive-resonator)
   - [Engine B — FM Pad (Dual-Serial Frequency Modulation)](#engine-b--fm-pad-dual-serial-frequency-modulation)
   - [Engine C — Bowed String (Resonant Waveguide)](#engine-c--bowed-string-resonant-waveguide)
   - [Diffusion — Schroeder–Moorer Reverb](#diffusion--schroedermoorer-reverb)
-- [Sound Design Rationale (Stylistic Choices)](#sound-design-rationale-stylistic-choices)
+- [Limits and known gaps](#limits-and-known-gaps)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-  - [Development](#development)
-  - [Build](#build)
 - [The DSP Sync Workflow](#the-dsp-sync-workflow)
 - [Data Source](#data-source)
 - [References](#references)
@@ -42,31 +71,307 @@ Watch the live demo on YouTube: https://youtu.be/KYNdKtD0t8s
 
 ---
 
-## Overview
+## The problem
 
-SoniChain is a desktop-and-web application that converts a live Binance data stream into a real-time auditory display. The design objective is not merely to *encode* data as sound, but to do so under an explicit **ergonomic constraint**: the listener must be able to keep the stream running in the background of attention for prolonged sessions without listening fatigue. Every mapping is therefore chosen against a psychoacoustic rationale (spatial imbalance cues, interval-based pitch motion instead of glissando, perceptually motivated timbral modulation) rather than against a naive linear data-to-frequency rule.
+A chart answers *what happened* to someone who is looking at it. It answers nothing to someone who is
+not. Market monitoring is a sustained-attention task with a bad ratio: hours of nothing, punctuated by
+seconds that matter, on a channel that requires the eyes to be pointed at it the whole time.
 
-The audio engine is authored in **RNBO** (Cycling '74) and exported to a WebAssembly/JS runtime; the host application is a **SvelteKit 2 / Svelte 5** frontend that runs both as a web app and, via **Tauri 2**, as a native desktop shell. Market metrics are computed off the main thread in a TypeScript **Web Worker** and pushed to the DSP device through a strictly unidirectional control path.
+Audition is the obvious substitute — it is omnidirectional, it does not require fixation, and the auditory
+system is unusually good at detecting *change* in a stream it has stopped consciously attending to. This is
+why sonification exists as a field. It is also why most sonifications fail in practice: the direct mapping
+of a scalar to frequency produces a continuous glissando, i.e. an alarm, and an alarm cannot be left
+running. The display has to be worn, not watched — which makes fatigue an engineering constraint on the
+mapping itself, not a polish item at the end.
+
+Everything below follows from that constraint. Where it forced a trade-off, the trade-off is stated.
 
 ---
 
-## Features
+## The version I threw away
 
-- **Five-metric market sonification** — `volatility`, `price`, `market_volume`, `density`, `maker_side`, each mapped to a perceptually motivated DSP target.
-- **Three switchable synthesis engines**, theme-selected at runtime: an inharmonic subtractive *glassarmonica*, a dual-serial *FM pad*, and a *Karplus–Strong / Jaffe–Smith* bowed-string waveguide.
-- **8-voice polyphony per engine**, so price transients trigger discrete overlapping notes (harp-like decay overlap) instead of a continuous pitch sweep — no siren-effect glissando, reduced auditory fatigue.
-- **Order-Flow-Imbalance spatialization** — sell pressure to the left channel, buy pressure to the right, giving an immediate non-symbolic map of market lean.
-- **Schroeder–Moorer stereo reverb** with RT60 and damping driven by live market state.
-- **Adaptive dynamic scaling** — a self-narrowing peak-detection window keeps the mapping calibrated across regime changes without manual re-ranging.
-- **Selectable engagement** — a logarithmic `market_volume` sensitivity curve (Low / Mid / High) lets the user dial the display from a discreet macro-event alarm to full micro-structure immersion.
-- **Built-in monitoring** — an `AnalyserNode`-backed `OutputScope` for scope/meter feedback.
-- **Cross-platform** — pure web app in development, native desktop via Tauri 2.
+Before this architecture there was a complete, working first version. It was built around a wavetable
+oscillator pair, and its mapping table looked like this:
+
+| Market data | Audio parameter | Synthesis technique |
+| --- | --- | --- |
+| 24h trend | Timbre (wavetable position) | Morphing across the Y axis (256 frames) between "bear" and "bull" spectral profiles |
+| Price micro-variations | Beat frequency (detune) | Phase interference between two `phasor~`-driven oscillators (binaural-beat simulation) |
+| Trade density | Amplitude (gain) | Dynamic gain mapping with `line~` for smooth envelopes |
+| Price volatility | Pitch | Real-time quantization onto a G Mixolydian scale spanning two octaves |
+
+Note what that table is trying to do: **pitch is deliberately assigned to volatility, not to price**,
+specifically to dodge the price → pitch cliché. It failed in three ways, and I abandoned the project for
+several months rather than patch it.
+
+**It was static.** A wavetable read at a stable rate produces a spectrum that changes only when the
+morphing position changes. Market data moves the position slowly, so the sound had no internal life — and a
+sound with no internal life becomes furniture within minutes. The ear stops parsing it, which is precisely
+the failure mode a peripheral display cannot have.
+
+**It became irritating over long sessions** — the thing it was designed not to be. Two detuned oscillators
+producing a continuous beat frequency is a sustained, unresolving interference pattern. It is a fine effect
+for thirty seconds and an unpleasant one for an hour.
+
+**Market direction was unreadable.** Displacing pitch onto volatility avoided the cliché and cost me the
+only auditory metaphor everyone already knows. Nothing in that mapping told you *which way* the market was
+going in a form the ear could grab.
+
+The restart, months later, came from inverting the assumption. The problem was never that price → pitch is
+a cliché; it is a cliché because it works. The problem is the *continuous* mapping. Take the discrete
+derivative of price, quantize it to a scale interval, and you keep the metaphor everybody understands while
+removing the glissando that makes it unbearable.
+
+The second decision was **physical modelling** instead of wavetables. A physically modelled resonator has
+internal behaviour: energy enters, circulates, decays, interacts with the excitation. It sounds like
+something is being *played* — which is the correct metaphor for this project, since the market is the
+performer and the DSP is the instrument. A sample library would have bought that organic quality too, but
+at the cost of shipping megabytes of audio in a desktop app; physical modelling buys it in code. The
+naturalness is generated, not stored.
+
+Every engine below is a consequence of that second start. So is the fact that the noise excitation is
+external and shared — it is the "bow" the market draws across whichever instrument is selected.
+
+---
+
+## Design decisions and what they cost
+
+### Intervals, not glissando
+
+**Decision** — `price` is not mapped to frequency. Its *discrete derivative* over the last two ticks is
+mapped to a step through a pre-quantized scale array: positive Δ → ascending motion, interval width ∝ |Δ|.
+With 8 voices per engine, transients trigger overlapping discrete notes with a harp-like decay overlap.
+
+**Rejected, twice.** First, price → continuous pitch: the mapping every sonification demo reaches for,
+maximally faithful to the data and maximally unlistenable — a portamento that never resolves reads as a
+siren, and the ear cannot habituate to it. Second, and less obviously, *avoiding pitch for price
+altogether*, which is what the [previous version](#the-version-i-threw-away) did by assigning pitch to
+volatility instead. That dodged the cliché and made market direction unreadable. The cliché is a cliché
+because the metaphor is correct; only its continuity had to go.
+
+**Cost** — resolution. Any price move smaller than the scale step is inaudible; the display quantizes away
+micro-structure that a continuous mapping would preserve. I took that trade because a display you mute
+after ten minutes has an effective resolution of zero.
+
+### Hard L/R for order-flow imbalance, not a timbral cue
+
+**Decision** — `maker_side` (buyer-is-maker flag, the order-flow imbalance proxy) drives the stereo
+panorama directly: sell pressure left, buy pressure right. Nothing else is panned, so the center stays
+clear.
+
+**Rejected** — encoding lean as timbre or as a secondary pitch layer. Both are *decodable*, and decoding
+is exactly what the design is trying to avoid: anything the listener has to interpret consciously has
+already cost the attention the display was meant to save. Spatial position is pre-attentive; it is felt
+before it is parsed.
+
+**Cost** — the cue is destroyed by mono playback, by a single earbud, and by any downstream mono-sum. The
+single most important signal in the display is the one most fragile to how it is listened to. There is no
+redundant encoding of it.
+
+### An adaptive scale, not a fixed one
+
+**Decision** — the value range is re-derived continuously instead of being fixed. A 30-second calibration
+window captures min/max per metric; at steady state the thresholds snap up to any new peak and then decay
+linearly toward zero over 60 s, so the mapping re-ranges itself as regimes change. `scaling/recalibration`
+re-runs the capture on demand; the same scheme is mirrored UI-side in `OutputScope.svelte` for the meters.
+
+**Rejected** — a fixed range calibrated once. With a fixed scale, a quiet market is inaudible and a
+volatile one saturates the top of the range and stays there — the display goes dead in exactly the two
+regimes where it should be most informative.
+
+**Cost** — this is the real one: **absolute comparability is gone.** The same pitch, the same brightness,
+the same reverb tail mean different things at different times. The display tells you what is happening
+*relative to the recent past*, not what the market is doing in absolute terms. You cannot look away for an
+hour, come back, and read the level. It is a change detector, not a gauge, and it should be read as one.
+
+### One excitation model across three engines
+
+**Decision** — all three engines are excited by the same external noise source, weighted by
+`market_volume`. The noise is never summed into the output; it drives the FM modulation-index envelope, and
+it is injected into the waveguide loop the way a pluck is. `density` low-passes it upstream of every
+engine.
+
+**Rejected** — giving each engine its own native excitation (oscillator attacks for FM, an impulse for the
+string). That would have been faster to build and would sound more conventionally "correct" per engine.
+
+**Cost** — each engine had to be rebuilt around external excitation rather than used as designed, which is
+where both bugs below came from. And none of the three can produce a hard attack transient: the palette is
+sustained textures only. In exchange, switching engines changes the timbre without changing what any
+metric *means* — the mapping is invariant across the three voices, so the listener's learned associations
+survive the switch.
+
+**Why three at all** — not for variety. The listening sessions made it clear that timbral tolerance is
+personal: a texture one listener can leave running for an hour is one another wants off. Since the display's
+whole value depends on someone being willing to keep it on, "pick the voice you can live with" is a
+functional requirement, not a preference setting. Three engines is the smallest number that spans
+meaningfully different characters — struck glass, warm pad, bowed string.
+
+### Sensitivity as a user control, not a tuned constant
+
+**Decision** — `market_volume` runs through a logarithmic transfer curve with three user-selectable
+settings (Low / Med / High). **Low** turns the display into a discreet macro-event alarm; **High** exposes
+the micro-pulse.
+
+**Rejected** — one curve, tuned by me. This is what the first version did, and it is the obvious choice:
+the designer knows the data, so the designer picks the response.
+
+**Origin** — a listener explicitly wanted to hear *more* than my tuning allowed: the small movements I had
+suppressed as noise were the ones they wanted. There is no correct setting, because the setting is not a
+property of the data — it is how much of their attention the listener is willing to spend, and only they
+know that.
+
+**Cost** — a control the user has to understand before the display behaves the way they want, and three
+response curves to keep coherent instead of one.
+
+### Raw numbers on the wire, scaling at the ends
+
+**Decision** — `crypto.worker.ts` computes and posts raw metrics (`price`, `market_volume`, `density` as
+inter-onset interval in ms, `maker_side` as 0/1, `volatility` as std-dev of log-returns over a 64-tick ring
+buffer). It normalizes nothing. Scaling lives in the RNBO control layer for audio and in `OutputScope` for
+the display. Only finite numbers cross the boundary — a `NaN` price short-circuits the tick, because it
+would propagate straight into an RNBO param and glitch the audio.
+
+**Rejected** — normalizing in the worker, which would have given one scaler instead of two.
+
+**Cost** — there are now two adaptive normalizers with the same intent and separate implementations, and
+they can drift apart: the meter can read differently from what the ear is being told. I accepted that
+because audio scaling has to happen at sample rate inside the DSP and the display's needs are not the
+DSP's, but it is real duplication and it is the first thing I would consolidate.
+
+### A 100 ms deaf spot on scale changes
+
+**Decision** — when the user switches musical scale, TICK → RNBO forwarding is gated off for 100 ms
+(`scaleSwitching` in `+page.svelte`).
+
+**Rejected** — forwarding through the switch. In-flight price events land on the old scale array while the
+new one is loading and produce audible bichords — a wrong-sounding artifact at the exact moment the user is
+paying attention to the sound.
+
+**Cost** — up to 100 ms of market data is never sonified, silently. A defensible loss for a user-initiated
+action; it would not be defensible if it happened on its own.
+
+---
+
+## What listening actually showed
+
+**Method, stated first so the findings can be discounted correctly.** No controlled evaluation was run.
+What exists is (a) roughly 4 hours of my own use, in the background, while working at my computer, spread
+over several days, and (b) one ~20-minute session with 5 listeners — friends, unblinded, no task, no
+control condition — who heard both this version and the abandoned one. This is a pilot at best. It is
+reported because in auditory-display work an honest pilot is worth more than an unevidenced claim, not
+because it settles anything.
+
+### Using it myself
+
+The thing I expected to be a failure turned out to be the design working as specified: **I never knew what
+the market was actually worth.** The display gave me no absolute level at any point — which is exactly the
+[cost of the adaptive scale](#an-adaptive-scale-not-a-fixed-one), experienced rather than predicted.
+
+What did work is the part that matters: during strong buy or sell pressure, the pitch movement was
+recognizable and **pulled my attention back without my having looked**. That is the actual specification —
+capture, not readout.
+
+One occurrence is worth reporting precisely. While working with the app running in the background, I
+registered that Bitcoin had been dropping substantially for a while, before I had gone to look at anything.
+The thought I had at the time was that a position with a stop-loss would have had more decision time than a
+chart I was not watching would have given.
+
+**What that is not:** I am not a trader, the position was hypothetical, nothing was backtested, and this is
+a single event with no counterfactual. It demonstrates one thing only, and narrowly: on one occasion, the
+sound crossed the attention threshold before the screen did. n = 1, observed by the author, who wanted it to
+work.
+
+### The 5-listener session
+
+| Listener profile | Response |
+| --- | --- |
+| 3 × finance-literate investors | Found it useful |
+| 1 × musician | Found it intuitive |
+| 1 × non-investor | **Could not correlate price movement with pitch movement** |
+
+**The negative result is the informative one.** Three listeners with a market model and one with a musical
+model each had something to hook the mapping onto. The listener with neither did not find the display
+unpleasant — they found it *meaningless*. This says the sonification is not self-explanatory: it assumes a
+pre-existing model of what a price move signifies, and supplies the acoustic cue rather than the concept.
+For a professional monitoring instrument that assumption is probably fine. As a general claim about
+intuitiveness it is not, and I have not addressed it — an onboarding or training mode is the honest fix,
+not a mapping change.
+
+### What the sessions changed in the shipped build
+
+Two features exist because of feedback on the earlier version, not because I designed them in:
+
+- **More than one voice.** Timbral tolerance turned out to be personal enough that a single texture would
+  have lost listeners outright → the three switchable engines.
+- **The logarithmic sensitivity curve and its three presets.** One listener wanted to hear the light
+  movements I had tuned out → sensitivity became a user control instead of my constant.
+
+### What the sessions could not test
+
+**Fatigue — the central claim of the entire project.** A 20-minute session cannot measure whether something
+is tolerable for hours; 20 minutes is inside the window where even the abandoned version was still
+pleasant. The only exposure long enough to speak to it is my own ~4 hours, which is n = 1 and maximally
+biased. Every fatigue-related statement in this README is therefore design rationale, grounded in
+psychoacoustic literature and in the specific failure of the previous version — not a measured outcome.
+
+---
+
+## Two bugs worth reporting
+
+Both are in the shipped source with their fixes. They are here because the diagnosis is more informative
+than the feature list.
+
+### FM: audible grain that was a filter, not a synthesis, problem
+
+**Symptom** — the FM pad had a persistent roughness, worst in the reverb return.
+
+**Wrong hypothesis** — the modulation index was too high and the spectrum was collapsing into buzz. It was
+not: at the 1:1 carrier:modulator ratio the index is floored at `0.35` and hard-clamped at `2.55`,
+deliberately far below the ~4–5 where sidebands go dense.
+
+**Root cause** — a single 15 ms one-pole follower was driving *both* amplitude and modulation index. 15 ms
+passes energy in the band that Zwicker & Fastl place in the roughness region (flutter to ~20 Hz, roughness
+20–300 Hz). On the amplitude path that is harmless. On the index path it is phase modulation of the carrier
+at a perceptible rate — **PM-index jitter** — which sprays spurious sidebands.
+
+**Fix** — decouple the followers: 15 ms for amplitude, **40 ms for the index**, placing the index path
+below the lower roughness boundary. The reverb was a red herring that pointed the right way: the output
+leaky integrator and the reverb combs are both leaky-integrator topologies, so they accumulated and
+prolonged the artifact, which is why it was loudest there.
+
+### Waveguide: a decay control that controlled colour instead
+
+**Symptom** — a fixed-frequency buzz, independent of `f0`, that grew rather than decayed. Turning the
+"decay" coefficient changed the timbre but not the decay time.
+
+**Root cause** — the original one-pole loop filter had **unity DC gain for any feedback coefficient**. So
+that coefficient set colour only, and at DC the loop degenerated into a perfect integrator over the delay
+period: any DC component of the excitation accumulated without bound. The parameter named "decay" was never
+a decay parameter.
+
+**Fix** (Revision 5) — three explicit stages instead of one implicit one:
+
+1. an **explicit loop gain < 1** (`DECAY_MAX = 0.995`) separated from damping — this is the actual decay,
+   driven by `volatility`;
+2. a **first-order DC blocker inside the loop** (`y[n] = x[n] − x[n−1] + R·y[n−1]`, `R = 0.999`, ≈ 7–8 Hz
+   cutoff @ 48 kHz), nulling the loop's DC gain so no DC ever circulates;
+3. **energy normalization of the injection** (`× (1 − loop_gain)`): at high Q the comb's resonant peak is
+   ≈ `1/(1 − loop_gain)` ≈ 200, so an uncompensated injection at high `market_volume` would clip. With it,
+   steady-state amplitude tracks injection level *independently of* `loop_gain`, and `loop_gain` controls
+   only tail duration.
+
+**Guarantee** — loop transfer `= HP(z)·loop_gain·LP(z)` with `|HP| ≤ 1`, `|LP| ≤ 1`, `loop_gain < 1` ⇒ loop
+gain `< 1` at every frequency and `→ 0` at DC. Unconditionally stable, by construction rather than by
+tuning.
 
 ---
 
 ## Architecture & Data Flow
 
-The signal path is **strictly unidirectional**: the worker computes metrics, the Svelte orchestrator forwards them as RNBO parameters, the DSP device synthesizes audio, and the Web Audio graph routes it to the output and to the monitoring scope. There is no feedback path from audio back into the data layer.
+The signal path is **strictly unidirectional**: the worker computes metrics, the Svelte orchestrator
+forwards them as RNBO parameters, the DSP device synthesizes, and the Web Audio graph routes to output and
+to monitoring. There is no feedback path from audio back into the data layer — the audio can never
+influence what the display is measuring.
 
 ```mermaid
 flowchart TD
@@ -114,100 +419,172 @@ flowchart TD
     LIM -->|"stereo out"| AC
 ```
 
-**Pipeline in words:** `Binance WebSocket → crypto.worker.ts → postMessage(TICK) → +page.svelte → setRnboParam() → RNBO device → Web Audio (AudioContext) → speakers + AnalyserNode → OutputScope.svelte`.
+**Why a worker at all** — metric computation runs per trade event at whatever rate Binance delivers, which
+is bursty and unbounded. On the main thread a burst competes with the render loop and with the RNBO device's
+control updates. Off-thread, a burst can only delay itself.
 
 ### Parameter Mapping
 
-Each market metric modulates a specific DSP target. The mapping is the core of the design: it is where market semantics become perceptual attributes.
+Each market metric modulates one DSP target. This table is the design: it is where market semantics become
+perceptual attributes.
 
 | Market metric | DSP target | Perceptual intent |
 | --- | --- | --- |
-| `maker_side` (Order Flow Imbalance) | Stereo pan — **Bearish → L**, **Bullish → R** | Spatial, pre-attentive map of market lean; keeps the stereo center uncluttered |
-| `price` (discrete Δ via `note_changer`) | Pitch / interval — **Δ > 0 → ascending**, interval width ∝ \|Δ\| | Direction *and* magnitude of price movement, communicated as a musical step |
-| `market_volume` | Noise excitation amplitude (log curve; Low / Mid / High) | Event intensity; user-selectable immersion depth |
-| `density` | Filter cutoff / brightness, comb gain, detune rate | "Proximity" and clarity; tighter trade flow reads as a fuller, closer, brighter sound |
-| `volatility` | Decay / feedback / loop gain, reverb RT60 | Acoustic "memory": turbulent markets leave a persistent, reverberant tail |
+| `maker_side` (order flow imbalance) | Stereo pan — **Bearish → L**, **Bullish → R** | Spatial, pre-attentive map of market lean; keeps the stereo center uncluttered |
+| `price` (discrete Δ via `note_changer`) | Pitch / interval — **Δ > 0 → ascending**, width ∝ \|Δ\| | Direction *and* magnitude, as a musical step rather than a slide |
+| `market_volume` | Noise excitation amplitude (log curve; Low / Med / High) | Event intensity; user-selectable immersion depth |
+| `density` (inter-onset interval, ms) | Filter cutoff / brightness, comb gain, detune rate | "Proximity": tighter trade flow reads as closer, fuller, brighter |
+| `volatility` (std-dev of log-returns, 64-tick window) | Decay / feedback / loop gain, reverb RT60 | Acoustic *memory*: turbulent markets leave a reverberant wake |
+
+The `market_volume` row is the only one the user can re-shape at runtime — see
+[Sensitivity as a user control](#sensitivity-as-a-user-control-not-a-tuned-constant) for why that
+particular parameter, and not the others, was handed over.
+
+### Calibration state machine
+
+Audio output is gated on startup by an explicit phase sequence:
+
+`initial-connecting → pending-calibrate → recal-connecting → calibrating → idle`
+
+Two constraints shaped it. First, the adaptive scaler has nothing to scale against until it has seen the
+market for a while, so the 30-second capture window has to complete before the mapping means anything —
+audio before that point is misleading, not merely rough. Second, browsers suspend the `AudioContext` until a
+user gesture, so the flow has to route through a deliberate click anyway.
+
+The handoff is driven by `calibrationPhase`, **not** by a `hasCalibrated` boolean — the earlier boolean
+version broke on re-calibration, when the phase and the history disagreed. The Calibrate button is also
+locked for ~1 s after the prompt first paints, because on first paint a user's click is landing on a button
+that appeared under their cursor.
 
 ---
 
 ## The RNBO Patch (DSP)
 
-The DSP is a single RNBO export (`DSP.export.json`) composed of a control/routing layer, three polyphonic synthesis engines, and a diffusion network. The four signal-generating/processing cores are implemented as **RNBOScript codeboxes**; everything below is documented from those sources, which are the source of truth for constants and topology.
+The DSP is a single RNBO export (`DSP.export.json`) — control/routing layer, three polyphonic engines, a
+diffusion network. The four signal cores are **RNBOScript codeboxes**; what follows is documented from those
+sources, which are the source of truth for constants and topology.
 
-A recurring engineering theme across all codeboxes: **per-sample one-pole smoothing (τ ≈ 5–10 ms) on every control parameter** to suppress zipper noise on the discretized, WebSocket-rate updates, plus explicit safety clamps and denormal flushing.
+A recurring theme across all of them: **per-sample one-pole smoothing (τ ≈ 5–10 ms) on every control
+parameter**, plus explicit safety clamps and denormal flushing. This is not decoration — the control values
+arrive at WebSocket rate in discrete jumps, and stepping a filter coefficient in one sample is zipper noise
+by construction.
 
 ### Control & Routing Layer
 
-- **Ingest & master output.** The layer receives the five metrics, applies the spatialization and scaling logic, and feeds a **brickwall limiter** upstream of the stereo output.
-- **Adaptive scaling subpatch.** Raw values are normalized to `[0.0, 1.0]` by a peak-detector with an **adaptive threshold** whose temporal window progressively narrows to track macroscopic range shifts — so a regime change (e.g. sideways → crash) re-ranges the display automatically, without manual recalibration.
-- **`market_volume` sensitivity** is shaped by a **logarithmic transfer curve** with user-selectable Low / Mid / High settings, trading off macro-event salience against micro-structure detail.
-- **Spatialization.** `maker_side` drives the stereo panorama as a direct read-out of Order Flow Imbalance: sell pressure (Bearish) → left, buy pressure (Bullish) → right.
-- **Frequency assignment (`scales` + `note_changer`).** `scales` emits pre-quantized frequency arrays, constraining tonal output to the selected scale. `note_changer` computes the **discrete derivative** of the last two `price` ticks: a positive delta triggers ascending harmonic motion, with interval width proportional to \|Δ\|. This module also drives the **engine switch** based on the active UI theme.
+- **Ingest & master output.** Receives the five metrics, applies spatialization and scaling, and feeds a
+  **brickwall limiter** upstream of the stereo output. The limiter exists because the display's dynamics are
+  driven by the market, which does not agree to a headroom budget in advance.
+- **Adaptive scaling subpatch.** Peak detector with an adaptive threshold whose window progressively
+  narrows to track macroscopic range shifts (see [the trade-off](#an-adaptive-scale-not-a-fixed-one)).
+- **`market_volume` sensitivity** — logarithmic transfer curve, Low / Med / High.
+- **Spatialization.** `maker_side` → stereo panorama as a direct order-flow-imbalance read-out.
+- **Frequency assignment (`scales` + `note_changer`).** `scales` emits pre-quantized frequency arrays,
+  constraining output to the selected scale. `note_changer` computes the discrete derivative of the last two
+  `price` ticks and drives the engine switch from the active UI theme.
 
 ### Engine A — Glassarmonica (Subtractive Resonator)
 
 High-Q subtractive synthesis emulating the inharmonic spectrum of a glass harmonica.
 
-- **Topology** — two parallel resonant **biquads** (Direct Form I), implemented as RBJ constant-0 dB-peak band-pass sections (`α = sin ω / 2Q`, `b0 = α/a0`, `b2 = −α/a0`, `a1 = −2cos ω/a0`, `a2 = (1−α)/a0`). The second filter is tuned to **f0 × 2.756**, an inharmonic partial ratio that gives the glass-like timbre. Coefficients are recomputed at sample rate to follow modulation.
-- **Self-sustaining resonance** — a **cross-channel feedback** loop (`input_L = in1 + fb_R·feedback`, `input_R = in2 + fb_L·feedback`) sustains the ring across the stereo pair.
+- **Topology** — two parallel resonant **biquads** (Direct Form I), RBJ constant-0 dB-peak band-pass
+  sections (`α = sin ω / 2Q`, `b0 = α/a0`, `b2 = −α/a0`, `a1 = −2cos ω/a0`, `a2 = (1−α)/a0`). The second is
+  tuned to **f0 × 2.756** — an inharmonic ratio, which is what makes it read as glass rather than as a
+  filtered tone. Coefficients recomputed at sample rate to follow modulation.
+- **Self-sustaining resonance** — **cross-channel feedback** (`input_L = in1 + fb_R·feedback`,
+  `input_R = in2 + fb_L·feedback`) sustains the ring across the stereo pair.
 - **Excitation** — pre-weighted white noise, low-passed as a function of `density`.
-- **Modulation** — `density` modulates the filter cutoff; `volatility` controls the feedback-loop gain. The codebox exposes `f0`, `Q`, and `feedback` as inlets; the metric-to-inlet mapping is applied upstream.
+- **Modulation** — `density` → cutoff; `volatility` → feedback gain. The codebox exposes `f0`, `Q`,
+  `feedback` as inlets; metric-to-inlet mapping is applied upstream.
 
 ### Engine B — FM Pad (Dual-Serial Frequency Modulation)
 
-A timbrally stable, noise-excited "warm bell" pad.
+A timbrally stable, noise-excited "warm bell" pad. See
+[the jitter bug](#fm-audible-grain-that-was-a-filter-not-a-synthesis-problem) for how the envelope structure
+got the way it is.
 
-- **Topology** — four operators in two independent serial chains, **Op2 → Op1 (L)** and **Op4 → Op3 (R)**, at a **carrier:modulator ratio of 1:1**, yielding a fully harmonic spectrum (Chowning 1973: an integer ratio places every sideband on an integer multiple of f0).
-- **Excitation model** — excitation is **100% external**: `in1`/`in2` carry `market_volume`-weighted noise. The noise is **never summed into the output**; instead it drives the FM modulation-index envelope and the feedback path, exactly as the excitation drives the delay line in a Karplus–Strong string. When the noise falls to zero, energy already in transit in the feedback path **continues to decay** by the coefficient from `in4` — a physical-tail behavior, not a hard cutoff.
-- **Modulation index** — a stable floor (`0.35`) plus an envelope-driven component, hard-clamped to a ceiling of `2.55` (`0.35 + 2.2`). The range is deliberately conservative: at a 1:1 ratio, indices beyond ~4–5 collapse the spectrum into a dense buzz.
-- **Decoupled envelopes (the key fix)** — two one-pole followers share the same noise source but serve perceptually distinct tasks. A **15 ms** follower drives *amplitude*; a slower **40 ms** follower drives the *modulation index*. The slower stage sits **below the lower roughness boundary** (Zwicker & Fastl: flutter to ~20 Hz, roughness 20–300 Hz), removing the residual band that a single 15 ms follower would otherwise pass into the index path as **PM-index jitter** — i.e. audible grain / spurious sidebands from phase modulation of the carrier at a perceptible rate. (The artifact was most audible in the reverb return, because the output leaky integrator and the reverb combs — both leaky-integrator topologies — accumulate and prolong it.)
-- **Stereo width** — symmetric detune of up to **±1.5 Hz** between the two carrier chains (≈ 3 Hz beat) produces slow chorus-like "breathing," not perceived inharmonicity.
-- **Decay** — a leaky integrator on the output models a Karplus–Strong-like physical tail post-excitation.
-- **Modulation** — `density` governs the noise low-pass and the detune rate; `volatility` controls the leaky-integrator feedback.
-- **Disclosure (from source):** no oversampling in this codebox; the conservative index keeps FM products clear of Nyquist. If f0 is pushed beyond ~1–2 kHz in sound-design, consider 2× oversampling at the patcher level.
+- **Topology** — four operators in two independent serial chains, **Op2 → Op1 (L)** and **Op4 → Op3 (R)**,
+  at a **carrier:modulator ratio of 1:1** — an integer ratio places every sideband on an integer multiple of
+  f0 (Chowning 1973), i.e. a fully harmonic spectrum.
+- **Excitation model** — **100 % external**: `in1`/`in2` carry `market_volume`-weighted noise, never summed
+  into the output. It drives the modulation-index envelope and the feedback path, the way excitation drives
+  the delay line in Karplus–Strong. When the noise falls to zero, energy already in transit continues to
+  decay by the coefficient from `in4` — a physical tail, not a hard cutoff.
+- **Modulation index** — floor `0.35` + envelope component, hard-clamped at `2.55`. Deliberately
+  conservative: at 1:1, indices past ~4–5 collapse the spectrum into buzz.
+- **Decoupled envelopes** — 15 ms follower → amplitude, 40 ms follower → index. See the bug above.
+- **Stereo width** — symmetric detune up to **±1.5 Hz** between carrier chains (≈ 3 Hz beat): slow
+  chorus-like breathing, below the threshold where it would read as inharmonicity.
+- **Decay** — leaky integrator on the output, modelling a K–S-like physical tail post-excitation.
+- **Modulation** — `density` → noise low-pass and detune rate; `volatility` → leaky-integrator feedback.
+- **Disclosure (from source)** — no oversampling in this codebox; the conservative index keeps FM products
+  clear of Nyquist. If f0 is pushed past ~1–2 kHz in sound design, 2× oversampling at the patcher level
+  would be required.
 
 ### Engine C — Bowed String (Resonant Waveguide)
 
-A continuously excited physical model (Karplus–Strong / Jaffe & Smith 1983) — the only string-bodied voice in the palette.
+A continuously excited physical model (Karplus–Strong / Jaffe & Smith 1983) — the only string-bodied voice
+in the palette. Its stability story is [above](#waveguide-a-decay-control-that-controlled-colour-instead).
 
-- **Topology** — a tuned **delay line** (length `sr / f0`, fractional, with 2-tap linear FIR interpolation) and filtered feedback. The external noise is injected continuously into the loop (project constraint: the excitor remains the external noise).
-- **Root-cause stability fix (Revision 5).** The original one-pole loop filter had **unity DC gain for any feedback coefficient**, so that coefficient controlled only color, not decay — and in DC the loop degenerated into a perfect integrator over the delay period, accumulating any DC component of the excitation into unbounded growth and a fixed-frequency buzz independent of f0. The canonical fix introduces three explicit stages:
-  1. an **explicit loop gain < 1** (`DECAY_MAX = 0.995`), separated from damping — this is the true decay, controlled by `volatility`;
-  2. a **first-order DC blocker inside the loop** (`y[n] = x[n] − x[n−1] + R·y[n−1]`, `R = 0.999` ≈ 7–8 Hz cutoff @ 48 kHz), nulling the loop's DC gain so no DC ever circulates in the delay;
-  3. **energy normalization of the injection** (`× (1 − loop_gain)`): at high Q the comb's resonant peak ≈ `1/(1 − loop_gain)` ≈ 200, so without compensation a strong injection (high `market_volume`) would saturate and clip. With it, steady-state amplitude tracks the injection level **independently of `loop_gain`**, while `loop_gain` controls only tail duration.
-- **Analytic guarantee** — loop transfer `= HP(z)·loop_gain·LP(z)` with `|HP| ≤ 1`, `|LP| ≤ 1`, `loop_gain < 1` ⇒ loop gain `< 1` at all frequencies, and `→ 0` in DC. **Unconditionally stable.**
-- **Damping** — a fixed-coefficient averaging filter `0.5·(x[n] + x[n−1])` (zero at Nyquist), classic K–S, frequency-invariant. The two excitation stages — brightness LP and resonant comb, both **`density`-controlled** — are strictly feedforward, outside the loop.
-- **Transitions** — a linear **crossfade** (`XFADE_SAMPLES = 480`) on real fundamental jumps eliminates phase clicks from delay-buffer discontinuity.
-- **Disclosure (from source):** not empirically verified in this context (no RNBO runtime available at authoring time). Linear delay interpolation has a less flat high-frequency phase than an allpass (Välimäki & Laakso 2000) but is intrinsically stable.
+- **Topology** — tuned **delay line** (length `sr / f0`, fractional, 2-tap linear FIR interpolation) with
+  filtered feedback; external noise injected continuously into the loop.
+- **Damping** — fixed-coefficient averaging filter `0.5·(x[n] + x[n−1])` (zero at Nyquist), classic K–S,
+  frequency-invariant. The two `density`-controlled excitation stages (brightness LP, resonant comb) are
+  strictly feedforward, **outside** the loop — anything inside it is part of the stability argument.
+- **Transitions** — linear **crossfade** (`XFADE_SAMPLES = 480`) on real fundamental jumps, eliminating
+  phase clicks from delay-buffer discontinuity.
+- **Disclosure (from source)** — not empirically verified in this context (no RNBO runtime available at
+  authoring time). Linear delay interpolation has less flat high-frequency phase than an allpass
+  (Välimäki & Laakso 2000) but is intrinsically stable — the right trade in a loop whose stability was
+  already the problem.
 
 ### Diffusion — Schroeder–Moorer Reverb
 
 A dedicated stereo spatial processor for the FM and waveguide voices.
 
-- **Topology** — **4 parallel comb filters + 2 cascaded allpass per channel** (Schroeder 1962; Moorer 1979), with in-loop damping. RT60→gain derivation follows Smith, *Physical Audio Signal Processing* (CCRMA) — the same reference used by the waveguide module.
-- **Decorrelation** — comb lengths are **coprime** and decorrelated L/R (Dattorro 1997) to maximize echo density without audible periodicity. Lengths are specified in samples at 48 kHz and auto-rescaled by `sr / 48000` to preserve the temporal ratios.
-- **Decay law** — Schroeder's `g = 10^(−3·d / (RT60·sr))` gives exactly −60 dB at `t = RT60`. A one-pole LPF in each comb loop (`damping`) models the faster HF absorption of real absorptive materials (Kuttruff, *Room Acoustics*).
-- **Allpass diffusion** — `y[n] = −g·x[n] + x[n−d] + g·y[n−d]`, `g = 0.6` (within `[0.5, 0.7]` for guaranteed stability and density without metallic coloration).
-- **Wet/dry** — a deliberately **linear** mix. Because the reverb is additive and the dry/wet sum is decorrelated, a linear crossfade does not produce the loudness dip of an equal-power crossfade between correlated signals — so linear is the correct choice here, not an omission.
-- **Modulation** — `volatility` scales RT60; `density` controls the damping (brightness).
+- **Topology** — **4 parallel combs + 2 cascaded allpass per channel** (Schroeder 1962; Moorer 1979), with
+  in-loop damping. RT60→gain derivation follows Smith, *Physical Audio Signal Processing* (CCRMA).
+- **Decorrelation** — comb lengths **coprime** and decorrelated L/R (Dattorro 1997), maximizing echo
+  density without audible periodicity. Specified in samples at 48 kHz, auto-rescaled by `sr / 48000` to
+  preserve temporal ratios across sample rates.
+- **Decay law** — `g = 10^(−3·d / (RT60·sr))`, exactly −60 dB at `t = RT60`. A one-pole LPF per comb loop
+  (`damping`) models the faster HF absorption of real materials (Kuttruff).
+- **Allpass diffusion** — `y[n] = −g·x[n] + x[n−d] + g·y[n−d]`, `g = 0.6` (inside `[0.5, 0.7]` for
+  stability and density without metallic colouration).
+- **Wet/dry** — deliberately **linear**, not equal-power. The reverb is additive and the dry/wet sum is
+  decorrelated, so a linear crossfade does not produce the loudness dip equal-power exists to fix. Linear is
+  the correct choice here, not an omission.
+- **Modulation** — `volatility` → RT60; `density` → damping.
 
 ---
 
-## Sound Design Rationale (Stylistic Choices)
+## Limits and known gaps
 
-> *The art of listening to data: psychoacoustic and UX choices in market sonification.*
+Stated plainly, because the alternative is being asked about them in an interview.
 
-Translating a financial data stream into sound is a UX problem, not just a technical one. The primary objective is to let the brain process market complexity **in the background** — intuitively, and without the listening fatigue typical of long sessions. Every market parameter is therefore bound to a deliberate psychoacoustic metaphor.
-
-**Logical spatialization — the weight of the market.** `maker_side`, the order-flow imbalance, governs the stereo panorama. Sell pressure (Bearish) is steered left, buy pressure (Bullish) right. The listener does not decode a complex timbre; they physically *feel* which way the market is leaning. The hard L/R separation also keeps the stereo center uncluttered, in line with the visual interface.
-
-**Price — intervals, not glissando.** The most critical datum uses a universal auditory metaphor: a rise in price raises pitch, a fall lowers it, and **larger price moves produce wider harmonic leaps**, communicating intensity instantly. Crucially for the listener's ear, the system avoids glissando — the continuous "siren" slide. By assigning **8 polyphonic voices** per engine, price transients trigger discrete notes that overlap fluidly, producing an organic, harp- or natural-reverb-like field. This removes the sense of artificiality and makes prolonged listening restful.
-
-**Timbre & texture — hearing density and volatility.** `density` controls brightness and filter cutoff: a denser market sounds *closer*, clearer, more present; in the FM pad it also introduces slight detuning whose slow beats read as "thickness" and "breath" rather than mistuning. `volatility` acts on decay and reverb tail: psychoacoustically it models *memory* / turbulence — in a highly volatile market, events leave a persistent acoustic wake and fuse into a reverberant, chaotic ambience; as volatility drops, the acoustic space dries out, becoming intimate, precise, defined.
-
-**Adaptability & cognitive load.** A display that screams at every spike quickly becomes intolerable. Adaptive logic continuously re-ranges the value excursion in the background, so a regime change re-scales smoothly rather than clipping. The logarithmic `market_volume` sensitivity curve then lets the user choose their level of involvement: **Low** acts as a discreet alarm for macro-events only; **High** allows total immersion in the market's micro-pulse.
-
-In short, the sound design moves past literal data playback toward **sensory ergonomics** — intensity becomes harmonic amplitude, imbalance becomes physical space, turbulence becomes acoustic persistence — yielding a monitoring instrument that does not fatigue, but integrates as a genuine sixth sense for market behavior.
+- **The evaluation is a pilot, not a study.** n = 5, ~20 minutes, friends, unblinded, no task and no
+  control condition, plus ~4 hours of self-use by the author. See
+  [What listening actually showed](#what-listening-actually-showed). A real evaluation would be task-based
+  with multiple listeners over sessions long enough to reach fatigue, per auditory-display methodology. I
+  have not run one, and the sessions I did run are structurally incapable of testing the project's central
+  claim.
+- **It is not self-explanatory.** One listener with no market model could not connect pitch movement to
+  price movement at all. The display supplies a cue, not a concept; it assumes the listener already knows
+  what a price move means. Unaddressed — there is no onboarding or training mode.
+- **No performance measurements.** CPU load of the WASM device and end-to-end tick-to-audio latency are not
+  measured. Both are obtainable — browser profiler for the former, worker-side timestamping for the latter —
+  and neither number is claimed anywhere in this README.
+- **Engine C is unverified against a runtime.** Its stability argument is analytic; there was no RNBO
+  runtime available when it was authored.
+- **The adaptive scale removes absolute comparability** — the display is a change detector, not a gauge.
+  This is by design, and it is the design's main limitation.
+- **The order-flow cue does not survive mono.** Single-earbud or mono-summed playback loses the most
+  important signal in the display, with no redundant encoding.
+- **Two normalizers, one intent.** The RNBO scaler and the `OutputScope` scaler implement the same idea
+  separately and can disagree. First thing on the consolidation list.
+- **No test framework and no CI.** `npm run check` (svelte-check, strict) is the only automated gate. For a
+  project whose correctness is largely audible, that is a real gap, not a stylistic one.
+- **Binance `aggTrade` only.** One venue, one stream type, no order-book depth, no cross-venue aggregation.
+  Depth would be the most informative missing metric and is deliberately out of scope for now.
 
 ---
 
@@ -221,7 +598,7 @@ In short, the sound design moves past literal data playback toward **sensory erg
 | Audio I/O & monitoring | **Web Audio API** directly — `AudioContext` + `AnalyserNode` (no wrapper) |
 | Build tool | **Vite 6**, with a custom `sync-dsp` plugin |
 | Desktop shell | **Tauri 2** (Rust); the frontend also runs as a pure web app in development |
-| Dev server | Fixed port **1420** (`strictPort: true`) |
+| Dev server | Fixed port **1420** (`strictPort: true`, required by `tauri dev`) |
 
 ---
 
@@ -259,6 +636,10 @@ SoniChain/
 └── package.json
 ```
 
+Selecting a theme is not only a colour change: `THEME_INSTRUMENT` in `+page.svelte` maps each theme to an
+RNBO `instrument` value, so the theme picker *is* the engine selector. One control, because they are one
+choice — the visual and sonic character of the display should not be able to disagree.
+
 ---
 
 ## Getting Started
@@ -266,8 +647,9 @@ SoniChain/
 ### Prerequisites
 
 - **Node.js** ≥ 20 (required by Vite 6 / SvelteKit 2) and a package manager (npm / pnpm).
-- **Rust** (stable toolchain) and the platform-specific **Tauri 2 prerequisites** — see the [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/) — only needed for the desktop build.
-- A network connection for the Binance WebSocket feed.
+- **Rust** (stable) and the platform **Tauri 2 prerequisites** — see the
+  [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/) — desktop build only.
+- A network connection for the Binance WebSocket feed. No API credentials: public market streams only.
 
 ### Installation
 
@@ -279,31 +661,17 @@ npm install
 
 ### Development
 
-Run the frontend as a pure web app (dev server on the fixed port **1420**):
-
 ```bash
-npm run dev
-```
-
-Run inside the Tauri desktop shell:
-
-```bash
-npm run tauri dev
+npm run dev          # pure web app, fixed port 1420
+npm run tauri dev    # inside the Tauri desktop shell
 ```
 
 ### Build
 
-Web build:
-
 ```bash
-npm run build
+npm run build        # web build
 npm run preview      # serve the production build locally
-```
-
-Native desktop bundle:
-
-```bash
-npm run tauri build
+npm run tauri build  # native desktop bundle
 ```
 
 ### Type-checking
@@ -319,31 +687,43 @@ This is the only automated correctness gate — run it after any TypeScript or S
 
 ## The DSP Sync Workflow
 
-The RNBO patch is authored as `src/RNBO/DSP1.json` but consumed at runtime as `static/DSP.export.json`. A **custom Vite plugin, `sync-dsp`**, keeps them in lockstep:
+The RNBO patch is authored as `src/RNBO/DSP1.json` but consumed at runtime as `static/DSP.export.json`. A
+custom Vite plugin, **`sync-dsp`**, keeps them in lockstep:
 
 - **On `buildStart`** — copies `src/RNBO/DSP1.json` → `static/DSP.export.json`.
-- **During `dev`** — watches `src/RNBO/DSP1.json`; on change, re-copies and triggers a full page reload so the new device loads immediately without a manual restart.
+- **During `dev`** — watches the source; on change, re-copies and triggers a full page reload so the new
+  device loads immediately. The page fetches it with a cache-busting `?v=<timestamp>` query.
 
-**Workflow for editing the DSP:** edit the patch in RNBO, re-export to `src/RNBO/DSP1.json` — the dev server picks up the change automatically (or run `npm run build` for a production rebuild). Do not edit `static/DSP.export.json` by hand; it is a generated artifact.
+**To edit the DSP:** change the patch in RNBO and re-export to `src/RNBO/DSP1.json`. Never hand-edit
+`static/DSP.export.json` — it is a generated artifact, and edits there are silently overwritten on the next
+build. The reason for the plugin is exactly that: without it, the two files drift and the bug looks like a
+DSP bug.
 
 ---
 
 ## Data Source
 
-Market data is sourced from **Binance** over a **WebSocket** connection, consumed in `crypto.worker.ts`. The worker computes the five microstructure metrics (`volatility`, `price`, `market_volume`, `density`, `maker_side`) off the main thread and pushes them to the orchestrator via `postMessage` `TICK` events. No credentials are required for public market streams.
+Market data comes from **Binance** over a **WebSocket** (`<symbol>@aggTrade`), consumed in
+`crypto.worker.ts`, which reconnects with a 3 s backoff on close. The worker computes the five
+microstructure metrics off the main thread and pushes them via `postMessage` `TICK` events.
+
+It is defensively hardened against the stream rather than against a spec: malformed JSON frames are caught
+and dropped, a non-finite `price` short-circuits the tick, and `market_volume` is coerced to a finite
+number. In an audio pipeline a single `NaN` is not a logged warning — it propagates into an RNBO parameter
+and the output audibly breaks.
 
 ---
 
 ## References
 
-The DSP design is grounded in the following literature, as cited throughout the codeboxes:
+The DSP design is grounded in the following literature, cited throughout the codeboxes:
 
-- Chowning, J. M. (1973). *The Synthesis of Complex Audio Spectra by Means of Frequency Modulation.* Journal of the Audio Engineering Society, 21(7).
-- Karplus, K., & Strong, A. (1983). *Digital Synthesis of Plucked-String and Drum Timbres.* Computer Music Journal, 7(2).
-- Jaffe, D. A., & Smith, J. O. (1983). *Extensions of the Karplus–Strong Plucked-String Algorithm.* Computer Music Journal, 7(2).
-- Schroeder, M. R. (1962). *Natural Sounding Artificial Reverberation.* Journal of the Audio Engineering Society, 10(3).
-- Moorer, J. A. (1979). *About This Reverberation Business.* Computer Music Journal, 3(2).
-- Dattorro, J. (1997). *Effect Design, Part 1: Reverberator and Other Filters.* Journal of the Audio Engineering Society, 45(9).
+- Chowning, J. M. (1973). *The Synthesis of Complex Audio Spectra by Means of Frequency Modulation.* JAES 21(7).
+- Karplus, K., & Strong, A. (1983). *Digital Synthesis of Plucked-String and Drum Timbres.* CMJ 7(2).
+- Jaffe, D. A., & Smith, J. O. (1983). *Extensions of the Karplus–Strong Plucked-String Algorithm.* CMJ 7(2).
+- Schroeder, M. R. (1962). *Natural Sounding Artificial Reverberation.* JAES 10(3).
+- Moorer, J. A. (1979). *About This Reverberation Business.* CMJ 3(2).
+- Dattorro, J. (1997). *Effect Design, Part 1: Reverberator and Other Filters.* JAES 45(9).
 - Välimäki, V., & Laakso, T. I. (2000). *Principles of Fractional Delay Filters.* IEEE ICASSP.
 - Zwicker, E., & Fastl, H. *Psychoacoustics: Facts and Models.* Springer.
 - Kuttruff, H. *Room Acoustics.* CRC Press.
@@ -353,7 +733,7 @@ The DSP design is grounded in the following literature, as cited throughout the 
 
 ## License
 
-This project is distributed under the terms of the [`LICENSE`](./LICENSE) file in the repository root.
+Distributed under the terms of the [`LICENSE`](./LICENSE) file in the repository root.
 
 ---
 
