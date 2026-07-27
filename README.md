@@ -40,6 +40,11 @@ leave running.
 - **Two shipped features came from listeners.** The three switchable engines and the
   user-controlled sensitivity curve both exist because of
   [what a listening session surfaced](#what-the-sessions-changed-in-the-shipped-build).
+- **The performance claims are measured, and the unmeasurable ones are named.** The DSP needs
+  [3.2% of one core and the figure does not move between engines](#dsp-cost-32-of-one-core-and-it-does-not-move),
+  which turned out to say something about the architecture; the software path is
+  [two orders of magnitude below the network delay](#next-to-the-network-none-of-it-matters); and
+  `outputLatency` is reported as not taken.
 - **The evaluation is reported as the pilot it is.** n = 5, ~20 minutes, unblinded; including
   [the one listener for whom the display meant nothing](#the-5-listener-session), and an explicit account
   of [why those sessions could not test the project's central claim](#what-the-sessions-could-not-test).
@@ -57,9 +62,10 @@ leave running.
 - [The version I threw away](#the-version-i-threw-away)
 - [Design decisions and what they cost](#design-decisions-and-what-they-cost)
   - [Intervals, not glissando](#intervals-not-glissando)
-  - [Hard L/R for order-flow imbalance, not a timbral cue](#hard-lr-for-order-flow-imbalance-not-a-timbral-cue)
+  - [A stereo lean for order-flow imbalance, not a timbral cue](#a-stereo-lean-for-order-flow-imbalance-not-a-timbral-cue)
   - [An adaptive scale, not a fixed one](#an-adaptive-scale-not-a-fixed-one)
   - [One excitation model across three engines](#one-excitation-model-across-three-engines)
+  - [All three engines run at all times](#all-three-engines-run-at-all-times)
   - [Sensitivity as a user control, not a tuned constant](#sensitivity-as-a-user-control-not-a-tuned-constant)
   - [Raw numbers on the wire, scaling at the ends](#raw-numbers-on-the-wire-scaling-at-the-ends)
   - [A 100 ms deaf spot on scale changes](#a-100-ms-deaf-spot-on-scale-changes)
@@ -71,6 +77,11 @@ leave running.
 - [Two bugs worth reporting](#two-bugs-worth-reporting)
   - [FM: audible grain that was a filter, not a synthesis, problem](#fm-audible-grain-that-was-a-filter-not-a-synthesis-problem)
   - [Waveguide: a decay control that controlled colour instead](#waveguide-a-decay-control-that-controlled-colour-instead)
+- [What it costs to run](#what-it-costs-to-run)
+  - [DSP cost: 3.2% of one core, and it does not move](#dsp-cost-32-of-one-core-and-it-does-not-move)
+  - [The control path is not where the time goes](#the-control-path-is-not-where-the-time-goes)
+  - [Next to the network, none of it matters](#next-to-the-network-none-of-it-matters)
+  - [A property of the stream I did not expect](#a-property-of-the-stream-i-did-not-expect)
 - [Architecture & Data Flow](#architecture--data-flow)
   - [Parameter Mapping](#parameter-mapping)
   - [Calibration state machine](#calibration-state-machine)
@@ -133,7 +144,7 @@ morphing position changes. Market data moves the position slowly, so the sound h
 sound with no internal life becomes furniture within minutes. The ear stops parsing it, which is precisely
 the failure mode a peripheral display cannot have.
 
-**It became irritating over long sessions**. The thing it was designed not to be. Two detuned oscillators
+**It became irritating over long sessions.** The thing it was designed not to be. Two detuned oscillators
 producing a continuous beat frequency is a sustained, unresolving interference pattern. It is a fine effect
 for thirty seconds and an unpleasant one for an hour.
 
@@ -161,7 +172,7 @@ external and shared; it is the "bow" the market draws across whichever instrumen
 
 ### Intervals, not glissando
 
-**Decision**. `price` is not mapped to frequency. Its *discrete derivative* over the last two ticks is
+**Decision.** `price` is not mapped to frequency. Its *discrete derivative* over the last two ticks is
 mapped to a step through a pre-quantized scale array: positive Δ → ascending motion, interval width ∝ |Δ|.
 With 8 voices per engine, transients trigger overlapping discrete notes with a harp-like decay overlap.
 
@@ -176,19 +187,27 @@ because the metaphor is correct; only its continuity had to go.
 micro-structure that a continuous mapping would preserve. I took that trade because a display you mute
 after ten minutes has an effective resolution of zero.
 
-### Hard L/R for order-flow imbalance, not a timbral cue
+### A stereo lean for order-flow imbalance, not a timbral cue
 
-**Decision.**  `maker_side` (buyer-is-maker flag, the order-flow imbalance proxy) drives the stereo
-panorama directly: sell pressure slightly left, buy pressure slightly right.
+**Decision.** `maker_side` (buyer-is-maker flag, the order-flow imbalance proxy) drives the stereo
+image: sell pressure leans left, buy pressure leans right. Not a hard pan. The two channel gains run in
+opposition between **1.0 and 0.28** (≈ 11 dB apart), and the move is glided over **1 s** rather than
+switched, so both channels always carry signal and the image drifts instead of flicking.
 
-**Rejected.** encoding lean as timbre or as a secondary pitch layer. Both are *decodable*, and decoding
+**Rejected.** Encoding lean as timbre or as a secondary pitch layer. Both are *decodable*, and decoding
 is exactly what the design is trying to avoid: anything the listener has to interpret consciously has
 already cost the attention the display was meant to save. Spatial position is pre-attentive; it is felt
 before it is parsed.
 
-**Cost.** The cue is destroyed by mono playback, by a single earbud, and by any downstream mono-sum. The
-single most important signal in the display is the one most fragile to how it is listened to. There is no
-redundant encoding of it.
+**Why not a hard pan.** Two reasons, both about leaving it running: a full pan parks one ear on silence,
+which is tiring over hours, and at the trade rates this stream reaches, an instant pan would flicker on
+every alternating trade. The 1 s glide turns a binary flag into a continuous lean, which is what makes it
+readable as *pressure* rather than as a sequence of events.
+
+**Cost.** The cue is destroyed by mono playback, by a single earbud, and by any downstream mono-sum: the
+sum of the two gains is identical in both states, so the information is not merely weakened but exactly
+cancelled. The single most important signal in the display is the one most fragile to how it is listened
+to, and there is no redundant encoding of it.
 
 ### An adaptive scale, not a fixed one
 
@@ -220,13 +239,39 @@ string). That would have been faster to build and would sound more conventionall
 where both bugs below came from. And none of the three can produce a hard attack transient: the palette is
 sustained textures only. In exchange, switching engines changes the timbre without changing what any
 metric *means*: the mapping is invariant across the three voices, so the listener's learned associations
-survive the switch.
+survive the switch. It also turned out to be what makes the switch itself inaudible, since excitation you
+can route is excitation you can hand from one engine to another
+([see below](#all-three-engines-run-at-all-times)).
 
 **Why three at all.** Not for variety. The listening sessions made it clear that timbral tolerance is
 personal: a texture one listener can leave running for an hour is one another wants off. Since the display's
 whole value depends on someone being willing to keep it on, "pick the voice you can live with" is a
 functional requirement, not a preference setting. Three engines is the smallest number that spans
 meaningfully different characters: struck glass, warm pad, bowed string.
+
+### All three engines run at all times
+
+**Decision.** Nothing is instantiated or torn down when the user switches theme. All three engine banks
+compute continuously, and the `instrument` parameter drives eight `gate~ 3` objects that route the shared
+noise **excitation** to one bank. The other two keep running with no input, so their resonators ring out
+their own tails while the incoming one starts being excited.
+
+**Rejected.** Gating or freeing the inactive banks, which is the obvious efficient choice and is what the
+measured cost would seem to argue for.
+
+**Why the excitation and not the output.** Because these are resonant models with physical tails, and the
+gate is placed upstream of them. Switching output would cut the outgoing voice mid-ring; switching
+excitation lets it decay the way a struck instrument does. The engine change costs no click, no mute, no
+gap, and it comes free from the topology rather than from a crossfade written for the purpose. This is the
+payoff of the [shared external excitation](#one-excitation-model-across-three-engines): once excitation is
+a signal you can route, instrument switching becomes a routing problem instead of a voice-allocation
+problem.
+
+**Cost, and it is now measured.** Roughly three times the DSP work for one audible engine, permanently:
+[3.2% of one core, flat across every configuration](#dsp-cost-32-of-one-core-and-it-does-not-move). The
+decision assumes headroom, and it is only defensible because the measurement says the headroom is there. On
+a target where 3% became 30% it would have to be revisited, and the revision is not simply "gate the
+inactive banks", since that is the thing that would reintroduce the click.
 
 ### Sensitivity as a user control, not a tuned constant
 
@@ -387,6 +432,80 @@ tuning.
 
 ---
 
+## What it costs to run
+
+Apple M4 Pro (14 logical cores), Chromium 149 headless, 48 kHz, `@rnbo/js` 1.3.4,
+the shipped `DSP.export.json`. Each figure below states its method, and the two that could not be measured
+are named as such.
+
+### DSP cost: 3.2% of one core, and it does not move
+
+Rendering 15 s of stereo output through the whole device in an `OfflineAudioContext`, with the five metrics
+driven at 2 Hz through `suspend()`/`resume()`:
+
+| Configuration | Wall clock for 15 s of audio | Share of one core |
+| --- | --- | --- |
+| Graphite, driven | 476.4 ms | 3.18% |
+| Slate, driven | 476.9 ms | 3.18% |
+| Bone, driven | 479.4 ms | 3.20% |
+| Slate, parameters static | 471.7 ms | 3.14% |
+| Slate, `master_volume` 0 (silent) | 479.1 ms | 3.19% |
+
+**The interesting result is the flatness.** Switching engine changes the cost by 0.02 percentage points, and
+muting the output changes nothing at all. All three engines are computed at all times: the patch
+instantiates 8 voice codeboxes per engine plus 2 reverb instances, 26 signal cores in total, and
+`instrument` routes the shared excitation to one bank rather than choosing which bank runs. That is
+[a deliberate trade for a seamless theme switch](#all-three-engines-run-at-all-times), and this table is
+its price tag: three engines' worth of DSP for one audible voice. Picking a theme therefore has no
+performance meaning. Driving the parameters costs 0.04 pp over static ones, which is inside the noise.
+
+**Caveat.** An offline render measures *throughput*, not real-time scheduling. It establishes that the DSP
+needs about 3% of a core's worth of work; it does not prove the audio thread always meets its deadline on a
+loaded machine, which is a different measurement I have not made.
+
+### The control path is not where the time goes
+
+- **Worker metric computation: 0.332 µs per tick** (median of 12 runs of 200,000 ticks, Node 26, same
+  machine; the ring buffer and log-return maths lifted verbatim from `crypto.worker.ts`). At the busiest
+  trade rate I measured on the live stream that is ~0.0004% of a core.
+- **Worker → main `postMessage`: below 0.1 ms at p99**, which is the resolution Chrome exposes; 1,800 warm
+  round trips never resolved above one tick of the clamped timer.
+- **Parameter set → audible:** one render quantum (**2.667 ms** at 48 kHz) plus `AudioContext.baseLatency`,
+  **5.333 ms** in this build.
+- **`outputLatency`: not measured.** Headless Chrome reports 0 because there is no audio device attached.
+  On real hardware it adds the device buffer and it will dominate every number in this list. I am not going
+  to quote a figure I could not take.
+
+### Next to the network, none of it matters
+
+Sampling the live `btcusdt@aggTrade` stream from this machine, two windows of 240 s and 180 s:
+
+| | 240 s window | 180 s window |
+| --- | --- | --- |
+| Trades per second | 12.93 | 7.90 |
+| Event time → local receipt, p50 | 86 ms | 86 ms |
+| Event time → local receipt, p99 | 402 ms | not recorded |
+
+The entire software path costs single-digit milliseconds against ~86 ms of network delay before a tick even
+arrives, with a p99 near 400 ms. This is the conclusion the measurements actually license: there is nothing
+worth optimizing on my side of the socket, and any latency claim about this app is really a claim about
+Binance and the route to it.
+
+### A property of the stream I did not expect
+
+**61.6% of consecutive `aggTrade` events carry the same millisecond timestamp.** Since `density` is defined
+as `T[n] − T[n−1]`, it is exactly **0 on about six ticks in ten**, and both sampling windows agree on this.
+The metric is not the smooth rate signal its name suggests; it is bimodal, a mass of zeros plus a long tail
+(non-zero p50 131 ms, p90 943 ms, max 3.3 s).
+
+The 300 ms smoothing ramp on the density control path absorbs most of it, which is why it never surfaced as
+an audible defect, but the honest reading is that `density` measures *burst membership* as much as it
+measures tempo. It is documented here rather than fixed: the correct definition would be trades per unit
+time over a window, which is a different metric with a different feel, and changing it means re-tuning every
+mapping it drives.
+
+---
+
 ## Architecture & Data Flow
 
 The signal path is **strictly unidirectional**: the worker computes metrics, the Svelte orchestrator
@@ -411,7 +530,7 @@ flowchart TD
         CTRL["Control Layer<br/>adaptive scaling · log volume curve<br/>maker_side to stereo pan (OFI)"]
         NOISE["Noise excitation<br/>amplitude from market_volume"]
         FREQ["scales + note_changer<br/>price delta to quantized interval"]
-        subgraph ENG["Synthesis Engines · 8-voice poly · theme-selected"]
+        subgraph ENG["Synthesis Engines · 8-voice poly · all three always running<br/>instrument gates the excitation, not the output"]
             direction LR
             GLASS["Glassarmonica<br/>dual inharmonic biquad BPF"]
             FM["FM Pad<br/>4-op dual-serial · ratio 1:1"]
@@ -453,7 +572,7 @@ perceptual attributes.
 
 | Market metric | DSP target | Perceptual intent |
 | --- | --- | --- |
-| `maker_side` (order flow imbalance) | Stereo pan: **Bearish → L**, **Bullish → R** | Spatial, pre-attentive map of market lean; keeps the stereo center uncluttered |
+| `maker_side` (order flow imbalance) | Stereo lean: **Bearish → L**, **Bullish → R** (gains 1.0 / 0.28, glided over 1 s) | Spatial, pre-attentive read of market lean; felt before it is parsed |
 | `price` (discrete Δ via `note_changer`) | Pitch / interval: **Δ > 0 → ascending**, width ∝ \|Δ\| | Direction *and* magnitude, as a musical step rather than a slide |
 | `market_volume` | Noise excitation amplitude (log curve; Low / Med / High) | Event intensity; user-selectable immersion depth |
 | `density` (inter-onset interval, ms) | Filter cutoff / brightness, comb gain, detune rate, reverb damping\* | Texture: a sparse market reads as separate events, bright and close; a busy one thickens into a darker, more diffuse wash |
@@ -639,9 +758,14 @@ Stated plainly, because the alternative is being asked about them in an intervie
 - **It is not self-explanatory.** One listener with no market model could not connect pitch movement to
   price movement at all. The display supplies a cue, not a concept; it assumes the listener already knows
   what a price move means. Unaddressed: there is no onboarding or training mode.
-- **No performance measurements.** CPU load of the WASM device and end-to-end tick-to-audio latency are not
-  measured. Both are obtainable (browser profiler for the former, worker-side
-  timestamping for the latter). Neither number is claimed anywhere in this README.
+- **The performance picture has two holes.** `outputLatency` was not measurable headless, so the hardware
+  side of the audio path is unquantified; and an offline render proves throughput, not that the audio thread
+  meets its deadline under load. Everything else in [What it costs to run](#what-it-costs-to-run) is measured
+  on one machine, and single-machine numbers are indicative, not portable.
+- **The cost of the seamless switch scales with the target.** Three engines run for one audible voice by
+  [design](#all-three-engines-run-at-all-times). At 3.2% of a core that is cheap; on hardware an order of
+  magnitude weaker it would not be, and the fix is not free because the always-on banks are what make the
+  switch inaudible.
 - **Engine C is unverified against a runtime.** Its stability argument is analytic; there was no RNBO
   runtime available when it was authored.
 - **The adaptive scale removes absolute comparability.** The display is a change detector, not a gauge.
@@ -661,9 +785,10 @@ Stated plainly, because the alternative is being asked about them in an intervie
 
 In priority order, and each one is here because something above says it should be:
 
-1. **Measure what is currently unmeasured.** WASM device CPU load via the browser profiler, and
-   tick-to-audio latency by timestamping in the worker and reading it back at the device. Both are hours of
-   work, and until they exist this README has to keep saying it makes no performance claim.
+1. **Close the two measurement holes.** `outputLatency` on real hardware (the headless harness cannot see
+   an audio device), and a real-time run under CPU load to confirm the audio thread holds its deadline,
+   which an offline render cannot show. The rest is already in
+   [What it costs to run](#what-it-costs-to-run).
 2. **A listening protocol long enough to reach fatigue.** The one claim the project is organised around is
    the one the 20-minute sessions could not touch. Sessions of an hour or more, a concurrent task so the
    display is genuinely peripheral, and listeners who are not my friends.
@@ -676,8 +801,12 @@ In priority order, and each one is here because something above says it should b
 5. **Order-book depth as a sixth metric.** The most informative thing `aggTrade` cannot see. It needs a
    perceptual axis that is still free, which (given how deliberately the current five are separated) is
    the actual design problem, not the data plumbing.
-6. **Verify Engine C against the runtime.** Its stability is argued analytically and has never been
-   confronted with a profiler.
+6. **Release engine banks after their tail has decayed**, rather than gating them outright. Only worth doing
+   on a constrained target, and it is the one form of the optimization that does not break the seamless
+   switch: a bank can be freed once it has finished ringing, not the moment it stops being excited.
+7. **Redefine `density` as a rate.** Six ticks in ten arrive with a zero inter-onset interval, so the metric
+   partly measures burst membership. Trades per unit time over a window is the correct definition, and
+   adopting it means re-tuning every mapping it drives.
 
 ---
 
