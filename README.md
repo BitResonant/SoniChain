@@ -1,56 +1,76 @@
 # SoniChain
 
-**Real-time sonification of Binance market microstructure through an RNBO DSP engine.**
+A real-time synthesis engine that turns a live crypto order flow into a continuous acoustic field, so that
+market state can be monitored *peripherally* rather than read off a chart. Trades are streamed from Binance
+over WebSocket, reduced to five microstructure metrics off the main thread, and used to drive three
+noise-excited synthesis engines — subtractive, FM, and a physical-model waveguide — authored in RNBO and
+running as WebAssembly. Ships as a web app and as a Tauri desktop app. Rebuilt from zero after the first
+version failed.
 
-SoniChain turns a live crypto order flow into a continuous acoustic field, so that market state can be
-monitored *peripherally* — kept in the background of attention — instead of being read off a chart.
-Five microstructure metrics drive three noise-excited synthesis engines (subtractive, FM, physical-model
-waveguide) and a Schroeder–Moorer diffusion network.
+**Matteo Caruso Linardon** (sole author: DSP design in Max/RNBO, frontend architecture, market-metric
+layer, UX).
 
-**[▶ Watch the live demo on YouTube](https://youtu.be/KYNdKtD0t8s)**
+**[▶ Watch the live demo on YouTube](https://youtu.be/KYNdKtD0t8s)**. The app running on the live Binance
+stream.
 
-![SvelteKit](https://img.shields.io/badge/SvelteKit-2-FF3E00?logo=svelte&logoColor=white)
-![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)
-![RNBO](https://img.shields.io/badge/@rnbo/js-1.3.4-7A5AF8)
-![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)
-![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
-![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)
+[![SoniChain demo video on YouTube](https://img.youtube.com/vi/KYNdKtD0t8s/mqdefault.jpg)](https://youtu.be/KYNdKtD0t8s)
 
----
+The first version of this project worked, and I abandoned it for several months. It sounded static, it
+became irritating well before the end of a working session, and it could not tell you which way the market
+was moving — because I had deliberately kept price off the pitch axis to avoid the obvious cliché. The
+engineering problem in the rebuild was accepting that the cliché is the correct metaphor and that its
+*continuity* is the defect, then finding what to give up in exchange for a display someone will actually
+leave running.
 
-## At a glance
+## What this project demonstrates
 
-**Role** — sole author: DSP design in Max/RNBO, frontend architecture, market-metric layer, UX. This is the
-second version; the [first one was abandoned](#the-version-i-threw-away) for several months and restarted
-from scratch.
+- **An architecture discarded, not patched.** The whole first mapping — wavetable morphing, binaural-beat
+  detune, pitch driven by volatility — is [documented with its diagnosis](#the-version-i-threw-away),
+  because the rebuild is only legible against what it replaced.
+- **The obvious mapping was rejected twice.** Once as continuous pitch, once as *avoiding* pitch for price
+  — [the second rejection was the expensive one](#intervals-not-glissando), and it is what cost the first
+  version its readability.
+- **A defect root-caused, not tuned away.** The waveguide's "decay" control
+  [was never a decay control](#waveguide-a-decay-control-that-controlled-colour-instead): the loop filter
+  had unity DC gain, so the loop degenerated into an integrator. The fix is three explicit stages and an
+  analytic stability argument, not a coefficient that happened to stop the buzz.
+- **Every decision carries its price in the same paragraph.** The adaptive scale
+  [costs absolute comparability](#an-adaptive-scale-not-a-fixed-one) — a limit I then
+  [ran into myself](#using-it-myself) during extended use, not one I inferred.
+- **Two shipped features came from listeners, not from me.** The three switchable engines and the
+  user-controlled sensitivity curve both exist because of
+  [what a listening session surfaced](#what-the-sessions-changed-in-the-shipped-build).
+- **The evaluation is reported as the pilot it is.** n = 5, ~20 minutes, unblinded — including
+  [the one listener for whom the display meant nothing](#the-5-listener-session), and an explicit account
+  of [why those sessions could not test the project's central claim](#what-the-sessions-could-not-test).
 
-**Problem** — a price chart demands the eyes. A trader watching one screen is not watching the other
-five. Sound is the only channel that can stay open while attention is elsewhere — but the naive mapping
-(price → continuous pitch) produces a siren, and a siren is unlistenable after ten minutes. The design
-problem is not *encoding* data as sound; it is encoding it in a form that survives hours of exposure.
-
-**Decisions, and what each one cost** — pitch is quantized to scale intervals (loses resolution on small
-moves); order-flow imbalance is hard-panned L/R (dies on mono playback); the display re-ranges itself
-adaptively (loses absolute comparability across time); all three engines are excited by the same external
-noise source (no engine can produce a hard attack transient).
-
-**Evidence** — informal: ~4 hours of my own background use across several working days, plus a ~20-minute
-session with 5 listeners (both versions of the project). No controlled test, n = 5, friends. Two concrete
-features in the shipped build exist because of what those sessions surfaced. Where a number appears in this
-README it is a constant from the source, never a benchmark: no CPU or latency figure is claimed.
-
-**Limits** — see [Limits and known gaps](#limits-and-known-gaps). The honest version is at the bottom of
-this file, not omitted from it.
+> **Scope.** SoniChain is a perceptual monitoring instrument, not a trading tool. It issues no signals,
+> executes no orders, holds no credentials, and makes no claim that listening to it improves any trading
+> outcome. It reads Binance's public `aggTrade` stream and turns it into sound. Nothing here is financial
+> advice.
 
 ---
 
 ## Table of Contents
 
-- [The problem](#the-problem)
+- [Design Intent](#design-intent)
 - [The version I threw away](#the-version-i-threw-away)
 - [Design decisions and what they cost](#design-decisions-and-what-they-cost)
+  - [Intervals, not glissando](#intervals-not-glissando)
+  - [Hard L/R for order-flow imbalance, not a timbral cue](#hard-lr-for-order-flow-imbalance-not-a-timbral-cue)
+  - [An adaptive scale, not a fixed one](#an-adaptive-scale-not-a-fixed-one)
+  - [One excitation model across three engines](#one-excitation-model-across-three-engines)
+  - [Sensitivity as a user control, not a tuned constant](#sensitivity-as-a-user-control-not-a-tuned-constant)
+  - [Raw numbers on the wire, scaling at the ends](#raw-numbers-on-the-wire-scaling-at-the-ends)
+  - [A 100 ms deaf spot on scale changes](#a-100-ms-deaf-spot-on-scale-changes)
 - [What listening actually showed](#what-listening-actually-showed)
+  - [Using it myself](#using-it-myself)
+  - [The 5-listener session](#the-5-listener-session)
+  - [What the sessions changed in the shipped build](#what-the-sessions-changed-in-the-shipped-build)
+  - [What the sessions could not test](#what-the-sessions-could-not-test)
 - [Two bugs worth reporting](#two-bugs-worth-reporting)
+  - [FM: audible grain that was a filter, not a synthesis, problem](#fm-audible-grain-that-was-a-filter-not-a-synthesis-problem)
+  - [Waveguide: a decay control that controlled colour instead](#waveguide-a-decay-control-that-controlled-colour-instead)
 - [Architecture & Data Flow](#architecture--data-flow)
   - [Parameter Mapping](#parameter-mapping)
   - [Calibration state machine](#calibration-state-machine)
@@ -61,6 +81,7 @@ this file, not omitted from it.
   - [Engine C — Bowed String (Resonant Waveguide)](#engine-c--bowed-string-resonant-waveguide)
   - [Diffusion — Schroeder–Moorer Reverb](#diffusion--schroedermoorer-reverb)
 - [Limits and known gaps](#limits-and-known-gaps)
+- [What Comes Next](#what-comes-next)
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
@@ -71,7 +92,7 @@ this file, not omitted from it.
 
 ---
 
-## The problem
+## Design Intent
 
 A chart answers *what happened* to someone who is looking at it. It answers nothing to someone who is
 not. Market monitoring is a sustained-attention task with a bad ratio: hours of nothing, punctuated by
@@ -85,6 +106,11 @@ running. The display has to be worn, not watched — which makes fatigue an engi
 mapping itself, not a polish item at the end.
 
 Everything below follows from that constraint. Where it forced a trade-off, the trade-off is stated.
+
+> **This is a design position, not a validated finding.** Tolerability over long sessions is the goal the
+> mappings were built to serve and the reason the first version was scrapped; it is not something this
+> project has measured. The evidence that exists is a pilot, and it is reported as one in
+> [What listening actually showed](#what-listening-actually-showed).
 
 ---
 
@@ -588,7 +614,38 @@ Stated plainly, because the alternative is being asked about them in an intervie
 
 ---
 
+## What Comes Next
+
+In priority order, and each one is here because something above says it should be:
+
+1. **Measure what is currently unmeasured.** WASM device CPU load via the browser profiler, and
+   tick-to-audio latency by timestamping in the worker and reading it back at the device. Both are hours of
+   work, and until they exist this README has to keep saying it makes no performance claim.
+2. **A listening protocol long enough to reach fatigue.** The one claim the project is organised around is
+   the one the 20-minute sessions could not touch. Sessions of an hour or more, a concurrent task so the
+   display is genuinely peripheral, and listeners who are not my friends.
+3. **An onboarding mode.** One listener in five got nothing from the display because it assumes a model of
+   price movement they did not have. A short guided pass — isolated cues, then combined — would test whether
+   that is a mapping problem or a training problem. I currently believe it is the second, and believing is
+   not knowing.
+4. **Collapse the two normalizers.** One adaptive scaler, one source of truth, used by both the DSP and the
+   meters. Today they can disagree and the user cannot tell which one is lying.
+5. **Order-book depth as a sixth metric.** The most informative thing `aggTrade` cannot see. It needs a
+   perceptual axis that is still free, which — given how deliberately the current five are separated — is
+   the actual design problem, not the data plumbing.
+6. **Verify Engine C against the runtime.** Its stability is argued analytically and has never been
+   confronted with a profiler.
+
+---
+
 ## Tech Stack
+
+![SvelteKit](https://img.shields.io/badge/SvelteKit-2-FF3E00?logo=svelte&logoColor=white)
+![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)
+![RNBO](https://img.shields.io/badge/@rnbo/js-1.3.4-7A5AF8)
+![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)
+![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
+![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)
 
 | Layer | Technology |
 | --- | --- |
