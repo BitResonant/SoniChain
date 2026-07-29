@@ -7,7 +7,7 @@ noise-excited synthesis engines (subtractive, FM, and a physical-model waveguide
 running as WebAssembly. Ships as a web app and as a Tauri desktop app. Rebuilt from zero after the first
 version failed.
 
-**Matteo Caruso Linardon** (sole author: DSP design in Max/RNBO, frontend architecture, market-metric
+**[Matteo Caruso Linardon](https://carusolinardon.com)** (sole author: DSP design in Max/RNBO, frontend architecture, market-metric
 layer, UX).
 
 **[▶ Watch the live demo on YouTube](https://youtu.be/KYNdKtD0t8s)**. The app running on the live Binance
