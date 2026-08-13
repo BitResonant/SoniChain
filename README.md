@@ -1,11 +1,10 @@
 # SoniChain
 
-A real-time synthesis engine that turns a live crypto order flow into a continuous acoustic field, so that
-market state can be monitored *peripherally* rather than read off a chart. Trades are streamed from Binance
-over WebSocket, reduced to five microstructure metrics off the main thread, and used to drive three
-noise-excited synthesis engines (subtractive, FM, and a physical-model waveguide) authored in RNBO and
-running as WebAssembly. Ships as a web app and as a Tauri desktop app. Rebuilt from zero after the first
-version failed.
+A real-time synthesis engine that turns live crypto order flow into sound, so market state can be
+monitored *passively* instead of read off a chart. Trades stream in from Binance over WebSocket, get
+reduced to five microstructure metrics off the main thread, and drive three noise-excited synthesis
+engines (subtractive, FM, and a physical-model waveguide) authored in RNBO and running as WebAssembly.
+Ships as a web app and as a Tauri desktop app.
 
 **[Matteo Caruso Linardon](https://carusolinardon.com)** (sole author: DSP design in Max/RNBO, frontend architecture, market-metric
 layer, UX).
@@ -24,32 +23,28 @@ engineering problem in the rebuild was accepting that the cliché is the correct
 *continuity* is the defect, then finding what to give up in exchange for a display someone will actually
 leave running.
 
-## What this project demonstrates
+## The short version
 
-- **An architecture discarded, not patched.** The whole first mapping (wavetable morphing, binaural-beat
-  detune, pitch driven by volatility) is [documented with its diagnosis](#the-version-i-threw-away),
-  because the rebuild is only legible against what it replaced.
-- **The obvious mapping was rejected twice.** Once as continuous pitch, once as *avoiding* pitch for price:
-  [the second rejection was the expensive one](#intervals-not-glissando), and it is what cost the first
-  version its readability.
-- **A defect root-caused, not tuned away.** The waveguide's "decay" control
-  [was never a decay control](#waveguide-a-decay-control-that-controlled-colour-instead): the loop filter
-  had unity DC gain, so the loop degenerated into an integrator. The fix is three explicit stages and an
-  analytic stability argument.
-- **Every decision carries its price in the same paragraph.** The adaptive scale
-  [costs absolute comparability](#an-adaptive-scale-not-a-fixed-one), a limit I then
-  [ran into myself](#using-it-myself) during extended use.
-- **Two shipped features came from listeners.** The three switchable engines and the
-  user-controlled sensitivity curve both exist because of
-  [what a listening session surfaced](#what-the-sessions-changed-in-the-shipped-build).
-- **The performance claims are measured, and the unmeasurable ones are named.** The DSP needs
-  [3.2% of one core and the figure does not move between engines](#dsp-cost-32-of-one-core-and-it-does-not-move),
-  which turned out to say something about the architecture; the software path is
-  [two orders of magnitude below the network delay](#next-to-the-network-none-of-it-matters); and
-  `outputLatency` is reported as not taken.
-- **The evaluation is reported as the pilot it is.** n = 5, ~20 minutes, unblinded; including
-  [the one listener for whom the display meant nothing](#the-5-listener-session), and an explicit account
-  of [why those sessions could not test the project's central claim](#what-the-sessions-could-not-test).
+This is a long document, so here's where the interesting parts are if you don't want to read all of it:
+
+- The first architecture I built, and dropped, is
+  [written up with a diagnosis of why it failed](#the-version-i-threw-away).
+- Price ended up mapped to pitch, the obvious choice, and the one I originally avoided on purpose.
+  [Why I came back to it](#intervals) is probably the single most useful section here.
+- The waveguide engine's "decay" knob
+  [turned out not to control decay at all](#waveguide-a-decay-control-that-controlled-colour-instead): a
+  loop filter with unity DC gain was quietly turning it into an integrator. The fix and the stability
+  argument are in there too.
+- Every design decision below is written next to what it cost, including the
+  [adaptive scale, whose limits I ran into myself](#an-adaptive-scale) after using the thing for a while.
+- The three switchable synth engines and the sensitivity control both exist because
+  [listeners asked for them](#what-the-sessions-changed-in-the-shipped-build), not because I planned them
+  from day one.
+- Performance is [measured where I could measure it](#dsp-cost-32-of-one-core-and-it-does-not-move), and
+  I've tried to be upfront about the couple of numbers I couldn't take, `outputLatency` mainly.
+- The listening sessions were small: 5 people, about 20 minutes, no control group.
+  [I say so plainly](#the-5-listener-session), including the one listener the display didn't work for at
+  all.
 
 > **Scope.** SoniChain is a perceptual monitoring instrument, not a trading tool. It issues no signals,
 > executes no orders, holds no credentials, and makes no claim that listening to it improves any trading
@@ -63,12 +58,12 @@ leave running.
 - [Design Intent](#design-intent)
 - [The version I threw away](#the-version-i-threw-away)
 - [Design decisions and what they cost](#design-decisions-and-what-they-cost)
-  - [Intervals, not glissando](#intervals-not-glissando)
-  - [A stereo lean for order-flow imbalance, not a timbral cue](#a-stereo-lean-for-order-flow-imbalance-not-a-timbral-cue)
-  - [An adaptive scale, not a fixed one](#an-adaptive-scale-not-a-fixed-one)
+  - [Intervals, not glissando](#intervals)
+  - [A stereo lean for order-flow imbalance, not a timbral cue](#a-stereo-lean-for-order-flow-imbalance)
+  - [An adaptive scale, not a fixed one](#an-adaptive-scale)
   - [One excitation model across three engines](#one-excitation-model-across-three-engines)
   - [All three engines run at all times](#all-three-engines-run-at-all-times)
-  - [Sensitivity as a user control, not a tuned constant](#sensitivity-as-a-user-control-not-a-tuned-constant)
+  - [Sensitivity as a user control, not a tuned constant](#sensitivity-as-a-user-control)
   - [Raw numbers on the wire, scaling at the ends](#raw-numbers-on-the-wire-scaling-at-the-ends)
   - [A 100 ms deaf spot on scale changes](#a-100-ms-deaf-spot-on-scale-changes)
 - [What listening actually showed](#what-listening-actually-showed)
@@ -113,12 +108,11 @@ seconds that matter, on a channel that requires the eyes to be pointed at it the
 
 Audition is the obvious substitute: it is omnidirectional, it does not require fixation, and the auditory
 system is unusually good at detecting *change* in a stream it has stopped consciously attending to. This is
-why sonification exists as a field. It is also why most sonifications fail in practice: the direct mapping
-of a scalar to frequency produces a continuous glissando, i.e. an alarm, and an alarm cannot be left
-running.
-Everything below follows from that constraint. Where it forced a trade-off, the trade-off is stated.
+why sonification exists as a field. It's also why a lot of sonifications struggle in practice: mapping a
+value directly to pitch tends to produce a continuous glissando, which starts to sound like an alarm, and
+an alarm isn't something you want left running in the background.
 
-> **This is a design position, not a validated finding.** Tolerability over long sessions is the goal the
+> **This is a design position.** Tolerability over long sessions is the goal the
 > mappings were built to serve and the reason the first version was scrapped; it is not something this
 > project has measured. The evidence that exists is a pilot, and it is reported as one in
 > [What listening actually showed](#what-listening-actually-showed).
@@ -137,7 +131,7 @@ oscillator pair, and its mapping table looked like this:
 | Trade density | Amplitude (gain) | Dynamic gain mapping with `line~` for smooth envelopes |
 | Price volatility | Pitch | Real-time quantization onto a G Mixolydian scale spanning two octaves |
 
-Note what that table is trying to do: **pitch is deliberately assigned to volatility, not to price**,
+Note what that table is trying to do: **pitch is deliberately assigned to volatility**
 specifically to dodge the price → pitch cliché. It failed in three ways, and I abandoned the project for
 several months.
 
@@ -154,7 +148,7 @@ for thirty seconds and an unpleasant one for an hour.
 only auditory metaphor everyone already knows. Nothing in that mapping told you *which way* the market was
 going in a form the ear could grab.
 
-The restart, months later, came from inverting the assumption. The problem was never that price → pitch is
+The restart came from inverting the assumption. The problem was never that price → pitch is
 a cliché; it is a cliché because it works. The problem is the *continuous* mapping. Take the discrete
 derivative of price, quantize it to a scale interval, and you keep the metaphor everybody understands while
 removing the glissando that makes it unbearable.
@@ -172,169 +166,173 @@ external and shared; it is the "bow" the market draws across whichever instrumen
 
 ## Design decisions and what they cost
 
-### Intervals, not glissando
+### Intervals
 
-**Decision.** `price` is not mapped to frequency. Its *discrete derivative* over the last two ticks is
-mapped to a step through a pre-quantized scale array: positive Δ → ascending motion, interval width ∝ |Δ|.
-With 8 voices per engine, transients trigger overlapping discrete notes with a harp-like decay overlap.
+`price` isn't mapped straight to frequency. What drives pitch is its *discrete derivative* over the last
+two ticks, stepped through a pre-quantized scale array: a positive Δ moves the pitch up, and the width of
+the interval scales with |Δ|. Each engine runs 8 voices, so transients trigger overlapping discrete notes
+that decay like a harp.
 
-**Rejected, twice.** First, price → continuous pitch: the mapping every sonification demo reaches for,
-maximally faithful to the data and maximally unlistenable; a portamento that never resolves reads as a
-siren, and the ear cannot habituate to it. Second, and less obviously, *avoiding pitch for price
-altogether*, which is what the [previous version](#the-version-i-threw-away) did by assigning pitch to
-volatility instead. That dodged the cliché and made market direction unreadable. The cliché is a cliché
-because the metaphor is correct; only its continuity had to go.
+I rejected two other approaches on the way here. The first was price mapped straight to continuous pitch,
+the thing every sonification demo reaches for. It's maximally faithful to the data and maximally
+unlistenable: a portamento that never resolves just reads as a siren, and the ear never habituates to it.
+The second, less obvious rejection was avoiding pitch for price altogether, which is what the
+[previous version](#the-version-i-threw-away) did by putting pitch on volatility instead. That dodged the
+cliché, but it also made market direction unreadable. The cliché exists because the metaphor is right; it
+was only the continuity that had to go.
 
-**Cost.** Any price move smaller than the scale step is inaudible; the display quantizes away
-micro-structure that a continuous mapping would preserve. I took that trade because a display you mute
-after ten minutes has an effective resolution of zero.
+The cost is real: any price move smaller than a scale step is inaudible, so the display quantizes away
+exactly the micro-structure a continuous mapping would keep. I took that trade anyway, because a display
+people mute after ten minutes has an effective resolution of zero.
 
-### A stereo lean for order-flow imbalance, not a timbral cue
+### A stereo lean for order-flow imbalance
 
-**Decision.** `maker_side` (buyer-is-maker flag, the order-flow imbalance proxy) drives the stereo
-image: sell pressure leans left, buy pressure leans right. Not a hard pan. The two channel gains run in
-opposition between **1.0 and 0.28** (≈ 11 dB apart), and the move is glided over **1 s** rather than
-switched, so both channels always carry signal and the image drifts instead of flicking.
+`maker_side`, the buyer-is-maker flag that stands in for order-flow imbalance, drives the stereo image:
+sell pressure leans left, buy pressure leans right. The two channel gains move in opposition between 1.0
+and 0.28, about 11 dB apart, glided over 1 second so both channels always carry some signal and the image
+drifts instead of flicking from side to side.
 
-**Rejected.** Encoding lean as timbre or as a secondary pitch layer. Both are *decodable*, and decoding
-is exactly what the design is trying to avoid: anything the listener has to interpret consciously has
-already cost the attention the display was meant to save. Spatial position is pre-attentive; it is felt
-before it is parsed.
+I considered coding that lean as timbre, or as a second pitch layer, and rejected both. They're decodable,
+which is exactly the problem: anything a listener has to consciously interpret has already spent the
+attention the display exists to save. Spatial position doesn't need interpreting. It's felt before it's
+parsed.
 
-**Why not a hard pan.** Two reasons, both about leaving it running: a full pan parks one ear on silence,
-which is tiring over hours, and at the trade rates this stream reaches, an instant pan would flicker on
-every alternating trade. The 1 s glide turns a binary flag into a continuous lean, which is what makes it
-readable as *pressure* rather than as a sequence of events.
+A hard pan was the other option, ruled out for two reasons that both come back to leaving this running for
+hours at a time: a full pan parks one ear on silence, which gets tiring, and at the trade rates this stream
+hits, an instant pan would flicker on every other trade. The 1-second glide turns a binary flag into a
+continuous lean, which is what lets it read as pressure building rather than as a string of individual
+events.
 
-**Cost.** The cue is destroyed by mono playback, by a single earbud, and by any downstream mono-sum: the
-sum of the two gains is identical in both states, so the information is not merely weakened but exactly
-cancelled. The single most important signal in the display is the one most fragile to how it is listened
-to, and there is no redundant encoding of it.
+The cost is that mono playback kills the cue outright. A single earbud, or any downstream mono-sum, adds
+the two gains together, and that sum is identical whether the market is buying or selling, so the
+information isn't just weakened, it's exactly cancelled. The most important signal in the whole display is
+also the most fragile to how it actually gets listened to.
 
-### An adaptive scale, not a fixed one
+### An adaptive scale
 
-**Decision.** The value range is re-derived continuously instead of being fixed. A 30-second calibration
-window captures min/max per metric; at steady state the thresholds snap up to any new peak and then decay
-linearly toward zero over 60 s, so the mapping re-ranges itself as regimes change. `scaling/recalibration`
-re-runs the capture on demand; the same scheme is mirrored UI-side in `OutputScope.svelte` for the meters.
+The value range re-derives itself continuously instead of being fixed. A 30-second calibration window
+captures the min and max for each metric; once that's set, the thresholds jump up to any new peak and then
+decay linearly back toward zero over 60 seconds, so the mapping keeps re-ranging itself as the market's
+regime changes. `scaling/recalibration` re-runs that capture on demand, and `OutputScope.svelte` mirrors
+the same scheme on the UI side for the meters.
 
-**Rejected.** A fixed range calibrated once. With a fixed scale, a quiet market is inaudible and a
-volatile one saturates the top of the range and stays there: the display goes dead in exactly the two
-regimes where it should be most informative.
+I tried a fixed range, calibrated once, first. It doesn't work: a quiet market goes inaudible, and a
+volatile one saturates the top of the range and just sits there, so the display goes dead in exactly the
+two conditions where it should be telling you the most.
 
-**Cost.** This is the real one: **absolute comparability is gone.** The same pitch, the same brightness,
-the same reverb tail mean different things at different times. The display tells you what is happening
-*relative to the recent past*, not what the market is doing in absolute terms. You cannot look away for an
-hour, come back, and read the level. It is a change detector, not a gauge, and it should be read as one.
+This is where the real cost sits: absolute comparability is gone. The same pitch, the same brightness, the
+same reverb tail can mean different things depending on when you're hearing them, because the display is
+only ever telling you what's happening relative to the recent past. You can't step away for an hour, come
+back, and read an absolute level off it. It's a change detector, not a gauge, and it has to be read as
+one.
 
 ### One excitation model across three engines
 
-**Decision.** All three engines are excited by the same external noise source, weighted by
-`market_volume`. The noise is never summed into the output; it drives the FM modulation-index envelope, and
-it is injected into the waveguide loop the way a pluck is. `density` low-passes it upstream of every
-engine.
+All three engines are excited by the same external noise source, weighted by `market_volume`. That noise
+never gets summed into the output directly; instead it drives the FM modulation-index envelope, and it
+gets injected into the waveguide loop the way a pluck would be. `density` low-passes it before it reaches
+any engine.
 
-**Rejected.** Giving each engine its own native excitation (oscillator attacks for FM, an impulse for the
-string). That would have been faster to build and would sound more conventionally "correct" per engine.
+I could have given each engine its own native excitation instead, oscillator attacks for the FM voice, an
+impulse for the string, and it would have been faster to build and sounded more conventionally "correct"
+per engine. I didn't, because a shared excitation is what makes the rest of this design possible.
 
-**Cost.** Each engine had to be rebuilt around external excitation rather than used as designed, which is
-where both bugs below came from. And none of the three can produce a hard attack transient: the palette is
-sustained textures only. In exchange, switching engines changes the timbre without changing what any
-metric *means*: the mapping is invariant across the three voices, so the listener's learned associations
-survive the switch. It also turned out to be what makes the switch itself inaudible, since excitation you
-can route is excitation you can hand from one engine to another
-([see below](#all-three-engines-run-at-all-times)).
+The cost showed up almost immediately: every engine had to be rebuilt around taking excitation from
+outside itself, and that rebuild is where both bugs described below came from. None of the three engines
+can produce a hard attack transient either, so the whole palette is sustained textures, nothing percussive.
+What it buys back is that switching engines changes the timbre without changing what any metric means. The
+mapping stays the same across all three voices, so whatever a listener has learned to associate with a
+sound survives a theme switch. It's also, it turned out, the reason the switch itself is inaudible:
+excitation you can route is excitation you can hand off from one engine to another without a click
+([more on that below](#all-three-engines-run-at-all-times)).
 
-**Why three at all.** Not for variety. The listening sessions made it clear that timbral tolerance is
-personal: a texture one listener can leave running for an hour is one another wants off. Since the display's
-whole value depends on someone being willing to keep it on, "pick the voice you can live with" is a
-functional requirement, not a preference setting. Three engines is the smallest number that spans
-meaningfully different characters: struck glass, warm pad, bowed string.
+Three engines exist at all because the listening sessions made it obvious that timbral tolerance is
+personal. A texture one listener can leave running for an hour is one another wants turned off in five
+minutes, and since the whole point of the display depends on someone being willing to keep it on, letting
+people pick a voice they can live with isn't a nice-to-have, it's a requirement. Three felt like the
+smallest number that covers meaningfully different characters: struck glass, a warm pad, a bowed string.
 
 ### All three engines run at all times
 
-**Decision.** Nothing is instantiated or torn down when the user switches theme. All three engine banks
-compute continuously, and the `instrument` parameter drives eight `gate~ 3` objects that route the shared
-noise **excitation** to one bank. The other two keep running with no input, so their resonators ring out
-their own tails while the incoming one starts being excited.
+Nothing gets instantiated or torn down when the user switches theme. All three engine banks compute
+continuously, all the time, and the `instrument` parameter just drives three `gate~ 8` objects that route
+the shared noise excitation to whichever bank is active. The other two keep running with nothing feeding
+them, so their resonators ring out their own tails naturally while the new one starts getting excited.
 
-**Rejected.** Gating or freeing the inactive banks, which is the obvious efficient choice and is what the
-measured cost would seem to argue for.
-
-**Why the excitation and not the output.** Because these are resonant models with physical tails, and the
-gate is placed upstream of them. Switching output would cut the outgoing voice mid-ring; switching
-excitation lets it decay the way a struck instrument does. The engine change costs no click, no mute, no
-gap, and it comes free from the topology rather than from a crossfade written for the purpose. This is the
-payoff of the [shared external excitation](#one-excitation-model-across-three-engines): once excitation is
-a signal you can route, instrument switching becomes a routing problem instead of a voice-allocation
+The obvious, more efficient choice would have been to gate or free the inactive banks, and the measured
+cost below makes a real case for that. I didn't, because gating the excitation instead of the output
+matters here specifically: these are resonant models with physical tails, and the gate sits upstream of
+them. Cutting the output would chop the outgoing voice off mid-ring; cutting the excitation lets it decay
+the way a struck instrument actually does. Switching engines costs no click, no mute, no gap, and none of
+that comes from a crossfade I had to write, it just falls out of the topology. That's the real payoff of
+[sharing one excitation across engines](#one-excitation-model-across-three-engines): once excitation is a
+signal you can route, switching instruments becomes a routing problem instead of a voice-allocation
 problem.
 
-**Cost, and it is now measured.** Roughly three times the DSP work for one audible engine, permanently:
-[3.2% of one core, flat across every configuration](#dsp-cost-32-of-one-core-and-it-does-not-move). The
-decision assumes headroom, and it is only defensible because the measurement says the headroom is there. On
-a target where 3% became 30% it would have to be revisited, and the revision is not simply "gate the
-inactive banks", since that is the thing that would reintroduce the click.
+It costs roughly three times the DSP work for one audible engine, permanently, and the measurement backs
+that up: [3.2% of one core, flat across every configuration](#dsp-cost-32-of-one-core-and-it-does-not-move).
+The whole decision assumes there's headroom to spend, and it's only defensible because the numbers say
+that headroom is actually there. On hardware where that 3% turned into 30%, I'd have to rethink it.
 
-### Sensitivity as a user control, not a tuned constant
+### Sensitivity as a user control
 
-**Decision.** `market_volume` runs through a logarithmic transfer curve with three user-selectable
-settings (Low / Med / High). **Low** turns the display into a discreet macro-event alarm; **High** exposes
-the micro-pulse.
+`market_volume` runs through a logarithmic transfer curve with three user-selectable settings: Low, Med,
+High. Low turns the display into a quiet macro-event alarm; High exposes the micro-pulse underneath.
 
-**Rejected.** One curve, tuned by me. This is what the first version did, and it is the obvious choice:
-the designer knows the data, so the designer picks the response.
+The obvious choice, and what the first version did, was one curve tuned by me, since I know the data and
+could just pick the response myself. What changed my mind was a listener who explicitly wanted to hear
+more than my tuning let through: the small movements I'd suppressed as noise were exactly the ones they
+were listening for. There isn't a correct setting, because the setting isn't really a property of the
+data. It's how much attention someone is willing to spend on this, and only they know that.
 
-**Origin.** A listener explicitly wanted to hear *more* than my tuning allowed: the small movements I had
-suppressed as noise were the ones they wanted. There is no correct setting, because the setting is not a
-property of the data: it is how much of their attention the listener is willing to spend, and only they
-know that.
-
-**Cost.** A control the user has to understand before the display behaves the way they want, and three
-response curves to keep coherent instead of one.
+The cost is a control the user has to understand before the display behaves the way they want, and three
+response curves I now have to keep coherent instead of one.
 
 ### Raw numbers on the wire, scaling at the ends
 
-**Decision.** `crypto.worker.ts` computes and posts raw metrics (`price`, `market_volume`, `density` as
-inter-onset interval in ms, `maker_side` as 0/1, `volatility` as std-dev of log-returns over a 64-tick ring
-buffer). It normalizes nothing. Scaling lives in the RNBO control layer for audio and in `OutputScope` for
-the display. Only finite numbers cross the boundary: a `NaN` price short-circuits the tick, because it
-would propagate straight into an RNBO param and glitch the audio.
+`crypto.worker.ts` computes and posts raw metrics, `price`, `market_volume`, `density` as the inter-onset
+interval in milliseconds, `maker_side` as 0 or 1, `volatility` as the standard deviation of log-returns
+over a 64-tick ring buffer, and normalizes none of it. Scaling happens twice downstream: in the RNBO
+control layer for audio, and in `OutputScope` for the display. The only guarantee the worker gives is that
+finite numbers cross the boundary; a `NaN` price short-circuits the tick before it can reach an RNBO
+parameter and glitch the audio.
 
-**Rejected.** Normalizing in the worker, which would have given one scaler instead of two.
+Normalizing once, inside the worker, would have given me a single scaler instead of two, and I considered
+it. I didn't do it because audio scaling needs to happen at sample rate inside the DSP, and the display's
+needs aren't the same as the DSP's.
 
-**Cost.** There are now two adaptive normalizers with the same intent and separate implementations, and
-they can drift apart: the meter can read differently from what the ear is being told. I accepted that
-because audio scaling has to happen at sample rate inside the DSP and the display's needs are not the
-DSP's, but it is real duplication and it is the first thing I would consolidate.
+That leaves real duplication: two adaptive normalizers built around the same idea, implemented separately,
+that can drift apart, so the meter can read differently from what the ear is actually being told. It's the
+first thing on my list to consolidate.
 
 ### A 100 ms deaf spot on scale changes
 
-**Decision.** When the user switches musical scale, TICK → RNBO forwarding is gated off for 100 ms
-(`scaleSwitching` in `+page.svelte`).
+When the user switches musical scale, TICK → RNBO forwarding gets gated off for 100 ms (`scaleSwitching`
+in `+page.svelte`).
 
-**Rejected.** Forwarding through the switch. In-flight price events land on the old scale array while the
-new one is loading and produce audible bichords (a wrong-sounding artifact at the exact moment the user is
-paying attention to the sound).
+I tried letting it forward straight through the switch, and it doesn't work: in-flight price events land
+on the old scale array while the new one is still loading, which produces audible bichords, a
+wrong-sounding artifact at exactly the moment the user is paying close attention to the sound.
 
-**Cost.** Up to 100 ms of market data is never sonified, silently. A defensible loss for a user-initiated
-action; it would not be defensible if it happened on its own.
+Up to 100 ms of market data goes silently un-sonified as a result. That's a loss I can live with because
+the user triggered it themselves; it would be a different story if it happened on its own.
 
 ---
 
 ## What listening actually showed
 
-**Method, stated first so the findings can be discounted correctly.** No controlled evaluation was run.
-What exists is (a) roughly 4 hours of my own use, in the background, while working at my computer, spread
-over several days, and (b) one ~20-minute session with 5 listeners (friends, unblinded, no task and no
-control condition) who heard both this version and the abandoned one. This is a pilot at best. It is
-reported because in auditory-display work an honest pilot is worth more than an unevidenced claim, not
+No controlled evaluation happened here, and I want to say that up front so the findings below get weighed
+accordingly. What exists is roughly 4 hours of my own use, in the background while working, spread over
+several days, plus one ~20-minute session with 5 friends who heard both this version and the abandoned
+one, unblinded, with no task and no control condition. Call it a pilot at best. I'm reporting it because
+in auditory-display work an honest pilot is worth more than a claim with no evidence behind it, not
 because it settles anything.
 
 ### Using it myself
 
 The thing I expected to be a failure turned out to be the design working as specified: **I never knew what
 the market was actually worth.** The display gave me no absolute level at any point, which is exactly the
-[cost of the adaptive scale](#an-adaptive-scale-not-a-fixed-one).
+[cost of the adaptive scale](#an-adaptive-scale).
 
 What did work is the part that matters: during strong buy or sell pressure, the pitch movement was
 recognizable and **pulled my attention back without my having looked**. That is the actual specification:
@@ -597,7 +595,7 @@ reverberant wake), and it is the wrong one here: it buys an evocative image at t
 together the events the listener needs to count when the market is moving fastest.
 
 The `market_volume` row is the only one the user can re-shape at runtime; see
-[Sensitivity as a user control](#sensitivity-as-a-user-control-not-a-tuned-constant) for why that
+[Sensitivity as a user control](#sensitivity-as-a-user-control) for why that
 particular parameter, and not the others, was handed over.
 
 ### Calibration state machine
@@ -636,7 +634,7 @@ by construction.
   **brickwall limiter** upstream of the stereo output. The limiter exists because the display's dynamics are
   driven by the market, which does not agree to a headroom budget in advance.
 - **Adaptive scaling subpatch.** Peak detector with an adaptive threshold whose window progressively
-  narrows to track macroscopic range shifts (see [the trade-off](#an-adaptive-scale-not-a-fixed-one)).
+  narrows to track macroscopic range shifts (see [the trade-off](#an-adaptive-scale)).
 - **`market_volume` sensitivity.** Logarithmic transfer curve, Low / Med / High.
 - **Spatialization.** `maker_side` → stereo panorama as a direct order-flow-imbalance read-out.
 - **Frequency assignment (`scales` + `note_changer`).** `scales` emits pre-quantized frequency arrays,
@@ -749,7 +747,7 @@ attention the display exists to save.
 
 ## Limits and known gaps
 
-Stated plainly, because the alternative is being asked about them in an interview.
+Written out here in plain language, because leaving them unsaid wouldn't make them any less true.
 
 - **The evaluation is a pilot, not a study.** n = 5, ~20 minutes, friends, unblinded, no task and no
   control condition, plus ~4 hours of self-use by the author. See
