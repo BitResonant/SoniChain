@@ -72,7 +72,7 @@ This is a long document, so here's where the interesting parts are if you don't 
   - [What the sessions changed in the shipped build](#what-the-sessions-changed-in-the-shipped-build)
   - [What the sessions could not test](#what-the-sessions-could-not-test)
 - [Two bugs worth reporting](#two-bugs-worth-reporting)
-  - [FM: audible grain that was a filter, not a synthesis, problem](#fm-audible-grain-that-was-a-filter-not-a-synthesis-problem)
+  - [FM: audible grain that was a filter problem](#fm-audible-grain-that-was-a-filter-problem)
   - [Waveguide: a decay control that controlled colour instead](#waveguide-a-decay-control-that-controlled-colour-instead)
 - [What it costs to run](#what-it-costs-to-run)
   - [DSP cost: 3.2% of one core, and it does not move](#dsp-cost-32-of-one-core-and-it-does-not-move)
@@ -387,7 +387,7 @@ psychoacoustic literature and in the specific failure of the previous version.
 Both are in the shipped source with their fixes. They are here because the diagnosis is more informative
 than the feature list.
 
-### FM: audible grain that was a filter, not a synthesis, problem
+### FM: audible grain that was a filter problem
 
 **Symptom.** The FM pad had a persistent roughness, worst in the reverb return.
 
@@ -662,7 +662,7 @@ High-Q subtractive synthesis emulating the inharmonic spectrum of a glass harmon
 
 A timbrally stable, noise-excited "warm bell" pad. Selected by the **Slate** theme, and sent through the
 [reverb](#reverb-schroeder-moorer). See
-[the jitter bug](#fm-audible-grain-that-was-a-filter-not-a-synthesis-problem) for how the envelope structure
+[the jitter bug](#fm-audible-grain-that-was-a-filter-problem) for how the envelope structure
 got the way it is.
 
 - **Topology.** Four operators in two independent serial chains, **Op2 → Op1 (L)** and **Op4 → Op3 (R)**,
@@ -731,7 +731,7 @@ loop, so it is the dry, close voice of the set; the other two get their space fr
   `density` is the *inter-onset interval in milliseconds*, so its numeric value runs **inverse** to how busy
   the market is: a tight trade flow means a small value, and therefore the brighter tail.
 - **Send levels.** Slate is **fully wet** (mix = 1.0), Bone sits at **0.8**, predelay is 0 on both. The FM
-  pad has no dry path at all, which is why the [PM-index jitter](#fm-audible-grain-that-was-a-filter-not-a-synthesis-problem)
+  pad has no dry path at all, which is why the [PM-index jitter](#fm-audible-grain-that-was-a-filter-problem)
   was audible there first and loudest.
 
 **Why this is the right channel for these two metrics.** Nobody listening is meant to notice that RT60
